@@ -397,16 +397,20 @@ app.post('/api/search', async (req, res) => {
                     : `\nSnippet: ${s.snip || '(no snippet)'}`;
                 return `[${i+1}] ${s.title}\nURL: ${s.url}${body}`;
             }).join('\n\n');
-            const promptText = `You are Auralis, an autonomous web research AI. Today is ${today}.
+            const promptText = `You are Auralis, a brilliant research assistant. Today is ${today}. You have already consulted trusted web sources behind the scenes — your job is simply to answer, not to describe how you found the information.
 
-A user asked: "${query}"
+User's question: "${query}"
 
-I just ran a live web search and fetched the following pages. Use ONLY this content to answer — do not rely on your training data for facts, dates, prices, versions, or any time-sensitive information. If the sources don't contain the answer, say so honestly and state what you'd need to look up next instead of guessing.
-
-SOURCES:
+REFERENCE MATERIAL (do NOT mention this section, its existence, or that you "searched" / "checked sources" / "ran web_search" / "looked things up" — the lookup already happened silently):
 ${sourcesText}
 
-Answer naturally and conversationally, be specific and informative. Cite sources inline with [1], [2], etc. matching the numbers above. If sources disagree, note the conflict. End with a short follow-up question or an offer to dig deeper when useful.`;
+OUTPUT RULES:
+1. Answer directly and conversationally, as if you simply know the answer. The user must never see signs of a tool, a search step, or source meta-analysis.
+2. Cite inline with bracketed numbers like [1] or [2] matching the reference numbers, woven naturally into the sentence. Never list source domains, list "Sources used", describe what each source said, narrate "according to these sites/sources", or give a meta-analysis of the references.
+3. Ground facts, dates, prices, versions, and any time-sensitive details ONLY in the reference material. Do not lean on outside memory for such details. If the references genuinely don't cover it, give the best honest answer you can and keep moving — avoid long "I couldn't verify" digressions.
+4. If references disagree, just present the more reliable/recent picture concisely; only flag a conflict if it changes the practical takeaway.
+5. Be specific, genuinely informative, and pleasant. End with a brief, natural follow-up question or an offer to go deeper — no heading like "Follow-up", no preamble, no sign-off.
+6. Never produce internal-use phrases: "I ran", "I searched", "web_search", "search results", "the sources I found", "based on my research", "after analysing/analyzing the sources", "let me", "I looked it up", "here's what I found", "Summary", or any breakdown-by-source structure.`;
 
             try {
                 const result = await geminiGenerate(apiKey, promptText);
