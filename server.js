@@ -134,7 +134,7 @@ async function validateGeminiKey(key) {
     try {
         const ctrl = new AbortController();
         const timer = setTimeout(() => ctrl.abort(), 8000);
-        const model = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+        const model = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
         const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -221,7 +221,7 @@ app.post('/api/search', async (req, res) => {
             const promptText = `You are Auralis, an advanced web research AI agent.\nThe user asked: "${query}"\n\nI ran a web search and pulled the following sources:\n${sourcesText}\n\nSynthesize a natural, conversational, and highly informative answer based on these sources. \nCite the sources inline using bracketed numbers like [1] or [2].\nDo NOT use rigid templates (like "Short answer" or "What the sources actually say"). Respond like a helpful, autonomous AI agent.\nIf applicable, suggest a follow-up or ask if they want you to dig deeper.`;
 
             try {
-                const model = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+                const model = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
                 const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
