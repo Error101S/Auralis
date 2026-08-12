@@ -28,6 +28,34 @@ const providerList = $('#providerList');
 const providerName = $('#providerName');
 const providerDot = $('#providerDot');
 
+/* ---------- Auralis logo (original emblem: a luminous aperture + radiating aural arcs) ---------- */
+function logoSVG(size = 28, gid = 'g'){
+  return `<svg viewBox="0 0 48 48" width="${size}" height="${size}" aria-hidden="true">
+    <defs>
+      <linearGradient id="auroraL${gid}" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0" stop-color="#7cf6ff"/><stop offset="0.5" stop-color="#9b8cff"/><stop offset="1" stop-color="#ff8ad1"/>
+      </linearGradient>
+      <linearGradient id="auroraR${gid}" x1="0" y1="1" x2="1" y2="0">
+        <stop offset="0" stop-color="#7cf6ff" stop-opacity="0.9"/><stop offset="1" stop-color="#ff8ad1" stop-opacity="0.9"/>
+      </linearGradient>
+    </defs>
+    <g class="logo-arcs">
+      <path class="arc arc-1" d="M5 16 A18 18 0 0 1 5 32" fill="none" stroke="url(#auroraL${gid})" stroke-width="2.6" stroke-linecap="round" opacity="0.55"/>
+      <path class="arc arc-2" d="M2 12 A24 24 0 0 1 2 36" fill="none" stroke="url(#auroraL${gid})" stroke-width="2.2" stroke-linecap="round" opacity="0.32"/>
+      <path class="arc arc-3" d="M10 20 A12 12 0 0 1 10 28" fill="none" stroke="url(#auroraL${gid})" stroke-width="2.4" stroke-linecap="round" opacity="0.8"/>
+    </g>
+    <g class="logo-arcs-right" transform="translate(48 0) scale(-1 1)">
+      <path class="arc arc-1" d="M5 16 A18 18 0 0 1 5 32" fill="none" stroke="url(#auroraR${gid})" stroke-width="2.6" stroke-linecap="round" opacity="0.55"/>
+      <path class="arc arc-2" d="M2 12 A24 24 0 0 1 2 36" fill="none" stroke="url(#auroraR${gid})" stroke-width="2.2" stroke-linecap="round" opacity="0.32"/>
+      <path class="arc arc-3" d="M10 20 A12 12 0 0 1 10 28" fill="none" stroke="url(#auroraR${gid})" stroke-width="2.4" stroke-linecap="round" opacity="0.8"/>
+    </g>
+    <path class="logo-core" d="M24 9 C30 18, 30 30, 24 39 C18 30, 18 18, 24 9 Z" fill="url(#auroraL${gid})"/>
+    <ellipse class="logo-spark" cx="24" cy="24" rx="3.2" ry="6" fill="#ffffff" opacity="0.85"/>
+  </svg>`;
+}
+let logoSeq = 0;
+function setLogoState(el, state){ if (el) el.dataset.state = state; }
+
 /* ---------- State ---------- */
 const STORAGE_KEY = 'auralis.chats.v1';
 const SETTING_KEY = 'auralis.settings.v1';
@@ -197,7 +225,8 @@ function renderAI(m){
   const el = document.createElement('div');
   el.className='msg ai';
   el.dataset.id = m.id;
-  el.innerHTML = `<div class="avatar">A</div><div class="body"><div class="bubble"></div>
+  const gid = 'a' + (logoSeq++);
+  el.innerHTML = `<div class="avatar avatar-ai auralis-logo" data-state="idle">${logoSVG(30, gid)}</div><div class="body"><div class="bubble"></div>
     <div class="actions">
       <button class="act copy"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke-width="2"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>Copy</button>
       <button class="act regen"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>Retry</button>
@@ -312,18 +341,19 @@ function renderSourcesInto(bubble, sources){
 }
 
 /* ---------- Streaming word-by-word ---------- */
-function streamIntoMessage(el, answerText, speed=14){
+function streamIntoMessage(el, answerText, speed=14, avatar=null){
   return new Promise(resolve=>{
     const answer = el.querySelector('.answer');
-    answer.innerHTML='';
+    if (answer) answer.innerHTML='';
+    if (avatar) setLogoState(avatar, 'talking');
     let i=0;
     const chunk = Math.max(2, Math.round(answerText.length/120));
     const tick = ()=>{
       i += chunk;
-      answer.innerHTML = renderMarkdown(answerText.slice(0,i) + (i<answerText.length? '▍':''));
+      if (answer) { answer.innerHTML = renderMarkdown(answerText.slice(0,i) + (i<answerText.length? '▍':'')); }
       messages.scrollTop = messages.scrollHeight;
       if (i < answerText.length) setTimeout(tick, speed);
-      else { answer.innerHTML = renderMarkdown(answerText); resolve(); }
+      else { if (answer) answer.innerHTML = renderMarkdown(answerText); if (avatar) setLogoState(avatar, 'idle'); resolve(); }
     };
     tick();
   });
@@ -565,9 +595,10 @@ async function runPipeline(userText, opts){
     renderMessages();
     const el = messages.querySelector(`.msg.ai[data-id="${m.id}"]`);
     const bubble = el.querySelector('.bubble');
+    const aiAvatar = el.querySelector('.avatar-ai');
+    setLogoState(aiAvatar, 'thinking');
 
     const stage = document.createElement('div');
-    stage.className='stage';
     stage.innerHTML = `<span class="spinner"></span>
       <span class="stage-text">Preparing search…</span>
       <span class="providers"></span>`;
@@ -629,7 +660,8 @@ async function runPipeline(userText, opts){
       navigator.clipboard.writeText(m.text).then(()=>{actRow.querySelector('.copy').lastChild.textContent=' Copied';setTimeout(()=>actRow.querySelector('.copy').lastChild.textContent=' Copy',1400);});
     });
 
-    await streamIntoMessage(el, m.text, 10);
+    await streamIntoMessage(el, m.text, 10, aiAvatar);
+    setLogoState(aiAvatar, 'idle');
     saveChats();
   } else {
     const m = opts.replace;
@@ -638,6 +670,8 @@ async function runPipeline(userText, opts){
     await sleep(50);
     const el = messages.querySelector(`.msg.ai[data-id="${m.id}"]`);
     if (!el){ return; }
+    const aiAvatar = el.querySelector('.avatar-ai');
+    setLogoState(aiAvatar, 'thinking');
     const api = await apiSearch(userText);
     let sources, text;
     if (api && api.text && api.sources){
@@ -653,7 +687,8 @@ async function runPipeline(userText, opts){
     bubble.innerHTML='';
     const answer=document.createElement('div');answer.className='answer';bubble.appendChild(answer);
     renderSourcesInto(bubble, sources);
-    await streamIntoMessage(el, m.text, 10);
+    await streamIntoMessage(el, m.text, 10, aiAvatar);
+    setLogoState(aiAvatar, 'idle');
     saveChats();
   }
 }

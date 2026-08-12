@@ -36,8 +36,9 @@ async function fetchPageText(url) {
         const r = await fetch(url, {
             signal: ctrl.signal,
             headers: {
-                'User-Agent': 'AuralisBot/1.0 (+research; +https://auralis.app)',
-                'Accept': 'text/html,application/xhtml+xml',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.9',
             },
             redirect: 'follow',
         });
@@ -79,7 +80,56 @@ async function enrichSources(searchResults) {
     });
 }
 
-// Set up sessions
+// Robust DuckDuckGo fallback: scrape the HTML endpoint directly with a real
+// browser UA. The duck-duck-scrape npm package gets blocked ("anomaly
+// detected") frequently, so this keeps live results flowing.
+const DDG_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+
+async function ddgHtmlSearch(query, { limit = 6 } = {}) {
+    try {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 10000);
+        const r = await fetch('https://html.duckduckgo.com/html/', {
+            method: 'POST',
+            signal: ctrl.signal,
+            headers: {
+                'User-Agent': DDG_UA,
+                'Accept': 'text/html,application/xhtml+xml',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Content-Type': 'application/x-www-form-urlencoded',
+            },
+            body: new URLSearchParams({ q: query, kl: 'us-en' }).toString(),
+            redirect: 'follow',
+        });
+        clearTimeout(timer);
+        if (!r.ok) return [];
+        const html = await r.text();
+        if (!html || html.length < 500) return [];
+        const { document } = parseHTML(html);
+        const out = [];
+        const anchors = document.querySelectorAll('.result__a, a.result__url');
+        const snips = document.querySelectorAll('.result__snippet');
+        const seen = new Set();
+        for (const a of anchors) {
+            let href = a.getAttribute('href') || '';
+            // DDG wraps links in a redirect; unwrap //duckduckgo.com/l/?uddg=...
+            const m = href.match(/[?&]uddg=([^&]+)/);
+            if (m) { try { href = decodeURIComponent(m[1]); } catch {} }
+            if (!/^https?:\/\//.test(href)) continue;
+            if (seen.has(href)) continue;
+            seen.add(href);
+            const idx = out.length;
+            const snip = snips[idx] ? (snips[idx].textContent || '').replace(/\s+/g, ' ').trim() : '';
+            out.push({ title: (a.textContent || '').replace(/\s+/g, ' ').trim(), url: href, snip });
+            if (out.length >= limit) break;
+        }
+        return out;
+    } catch {
+        return [];
+    }
+}
+
+
 app.use(session({
     secret: process.env.SESSION_SECRET || 'auralis-super-secret-key-123',
     resave: false,
@@ -347,22 +397,27 @@ app.post('/api/search', async (req, res) => {
     }
 
     try {
-        // 1. Perform web search using duck-duck-scrape
+        // 1. Perform web search using duck-duck-scrape, with a robust HTML fallback.
         let searchResults = [];
         try {
             const results = await search(query, { safeSearch: SafeSearchType.MODERATE });
-            // Take top 5 results
             searchResults = results.results.slice(0, 5).map(r => ({
                 title: r.title,
                 url: r.url,
                 snip: r.description
             }));
-            
-            if (searchResults.length === 0) {
-                searchResults = mockSources(query);
-            }
         } catch (searchErr) {
-            console.error('Search failed, using mock data:', searchErr.message);
+            console.error('duck-duck-scrape failed:', searchErr.message);
+        }
+        // If the npm package was blocked/empty, fall back to scraping DDG's HTML endpoint.
+        if (searchResults.length === 0) {
+            console.log('Falling back to DDG HTML endpoint...');
+            const fb = await ddgHtmlSearch(query);
+            if (fb.length > 0) searchResults = fb.slice(0, 5);
+            console.log(`DDG HTML returned ${searchResults.length} results`);
+        }
+        // Absolute last resort: canned placeholders (genuinely no live data available).
+        if (searchResults.length === 0) {
             searchResults = mockSources(query);
         }
 

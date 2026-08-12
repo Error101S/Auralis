@@ -25,16 +25,31 @@
   <aside id="sidebar" class="sidebar" aria-label="Previous chats">
     <div class="sidebar-head">
       <div class="brand">
-        <span class="brand-mark">
-          <svg viewBox="0 0 32 32" width="26" height="26" aria-hidden="true">
+        <span class="brand-mark auralis-logo" data-state="idle">
+          <svg viewBox="0 0 48 48" width="28" height="28" aria-hidden="true">
             <defs>
-              <linearGradient id="lg" x1="0" y1="0" x2="1" y2="1">
+              <linearGradient id="auroraGrad" x1="0" y1="0" x2="1" y2="1">
                 <stop offset="0" stop-color="#7cf6ff"/>
                 <stop offset="0.5" stop-color="#9b8cff"/>
                 <stop offset="1" stop-color="#ff8ad1"/>
               </linearGradient>
+              <linearGradient id="auroraGrad2" x1="0" y1="1" x2="1" y2="0">
+                <stop offset="0" stop-color="#7cf6ff" stop-opacity="0.9"/>
+                <stop offset="1" stop-color="#ff8ad1" stop-opacity="0.9"/>
+              </linearGradient>
             </defs>
-            <path d="M16 2 L20 12 L30 16 L20 20 L16 30 L12 20 L2 16 L12 12 Z" fill="url(#lg)"/>
+            <g class="logo-arcs">
+              <path class="arc arc-1" d="M5 16 A18 18 0 0 1 5 32" fill="none" stroke="url(#auroraGrad)" stroke-width="2.6" stroke-linecap="round" opacity="0.55"/>
+              <path class="arc arc-2" d="M2 12 A24 24 0 0 1 2 36" fill="none" stroke="url(#auroraGrad)" stroke-width="2.2" stroke-linecap="round" opacity="0.32"/>
+              <path class="arc arc-3" d="M10 20 A12 12 0 0 1 10 28" fill="none" stroke="url(#auroraGrad)" stroke-width="2.4" stroke-linecap="round" opacity="0.8"/>
+            </g>
+            <g class="logo-arcs-right" transform="translate(48 0) scale(-1 1)">
+              <path class="arc arc-1" d="M5 16 A18 18 0 0 1 5 32" fill="none" stroke="url(#auroraGrad2)" stroke-width="2.6" stroke-linecap="round" opacity="0.55"/>
+              <path class="arc arc-2" d="M2 12 A24 24 0 0 1 2 36" fill="none" stroke="url(#auroraGrad2)" stroke-width="2.2" stroke-linecap="round" opacity="0.32"/>
+              <path class="arc arc-3" d="M10 20 A12 12 0 0 1 10 28" fill="none" stroke="url(#auroraGrad2)" stroke-width="2.4" stroke-linecap="round" opacity="0.8"/>
+            </g>
+            <path class="logo-core" d="M24 9 C30 18, 30 30, 24 39 C18 30, 18 18, 24 9 Z" fill="url(#auroraGrad)"/>
+            <ellipse class="logo-spark" cx="24" cy="24" rx="3.2" ry="6" fill="#ffffff" opacity="0.85"/>
           </svg>
         </span>
         <span class="brand-name">Auralis</span>
@@ -85,11 +100,32 @@
 
     <!-- Empty state -->
     <section id="emptyState" class="empty">
-      <div class="orb">
-        <span class="orb-core"></span>
-        <span class="orb-ring r1"></span>
-        <span class="orb-ring r2"></span>
-        <span class="orb-ring r3"></span>
+      <div class="auralis-logo logo-hero" data-state="idle">
+        <svg viewBox="0 0 48 48" width="96" height="96" aria-hidden="true">
+          <defs>
+            <linearGradient id="auroraGradHero" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0" stop-color="#7cf6ff"/>
+              <stop offset="0.5" stop-color="#9b8cff"/>
+              <stop offset="1" stop-color="#ff8ad1"/>
+            </linearGradient>
+            <linearGradient id="auroraGradHero2" x1="0" y1="1" x2="1" y2="0">
+              <stop offset="0" stop-color="#7cf6ff" stop-opacity="0.9"/>
+              <stop offset="1" stop-color="#ff8ad1" stop-opacity="0.9"/>
+            </linearGradient>
+          </defs>
+          <g class="logo-arcs">
+            <path class="arc arc-1" d="M5 16 A18 18 0 0 1 5 32" fill="none" stroke="url(#auroraGradHero)" stroke-width="2.6" stroke-linecap="round" opacity="0.55"/>
+            <path class="arc arc-2" d="M2 12 A24 24 0 0 1 2 36" fill="none" stroke="url(#auroraGradHero)" stroke-width="2.2" stroke-linecap="round" opacity="0.32"/>
+            <path class="arc arc-3" d="M10 20 A12 12 0 0 1 10 28" fill="none" stroke="url(#auroraGradHero)" stroke-width="2.4" stroke-linecap="round" opacity="0.8"/>
+          </g>
+          <g class="logo-arcs-right" transform="translate(48 0) scale(-1 1)">
+            <path class="arc arc-1" d="M5 16 A18 18 0 0 1 5 32" fill="none" stroke="url(#auroraGradHero2)" stroke-width="2.6" stroke-linecap="round" opacity="0.55"/>
+            <path class="arc arc-2" d="M2 12 A24 24 0 0 1 2 36" fill="none" stroke="url(#auroraGradHero2)" stroke-width="2.2" stroke-linecap="round" opacity="0.32"/>
+            <path class="arc arc-3" d="M10 20 A12 12 0 0 1 10 28" fill="none" stroke="url(#auroraGradHero2)" stroke-width="2.4" stroke-linecap="round" opacity="0.8"/>
+          </g>
+          <path class="logo-core" d="M24 9 C30 18, 30 30, 24 39 C18 30, 18 18, 24 9 Z" fill="url(#auroraGradHero)"/>
+          <ellipse class="logo-spark" cx="24" cy="24" rx="3.2" ry="6" fill="#ffffff" opacity="0.85"/>
+        </svg>
       </div>
       <h1>What should we <em>uncover</em>?</h1>
       <p>Auralis reads the live web across 24 search engines, then reasons for you.</p>
