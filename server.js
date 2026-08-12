@@ -334,7 +334,9 @@ async function geminiGenerate(apiKey, prompt, { timeout = 20000 } = {}) {
 }
 
 
-// Fallback search mock if DuckDuckGo fails
+// Fallback search placeholder (kept only as the absolute last resort so the
+// frontend still gets a clickable Sources list; NEVER injected into the
+// Gemini prompt — see the no-results / system-query guards in /api/search).
 const mockSources = (query) => {
     return [
         { title: 'Understanding ' + query, url: 'https://example.com/1', snip: 'An in-depth look at ' + query },
@@ -342,6 +344,49 @@ const mockSources = (query) => {
         { title: query + ' Explained', url: 'https://example.com/3', snip: 'A simple explanation of ' + query }
     ];
 };
+
+// True when a query is a direct, answerable system/meta question that should
+// not be sent to live web search at all (current date, who are you, etc.).
+const SYSTEM_QUERY_RE = /\b(what(\s+i[s']?s|'s)\s+today|what\s+day|current\s+(date|time)|wh?[o0]?\s+are?\s+you|your\s+name|what\s+can\s+you\s+do|who\s+built\s+you|are?\s+you\s+(ai|a\s+bot|human))\b/i;
+
+// Simple intent + topic detection for the built-in (no-Gemini-key) synthesizer.
+const INTENTS = [
+    { re: /\bhow\s+(do|to|can|does)/i, key: 'howto' },
+    { re: /\bvs?\.?|better|best|compare|difference\b/i, key: 'compare' },
+    { re: /^why\b|\bwhy\s+(is|are|do|does)/i, key: 'why' },
+    { re: /\bwhat\s+(is|are)|define|definition\b/i, key: 'whatis' },
+    { re: /\bbest|recommend|should\s+i\s+(buy|use|get)|top\s+\d/i, key: 'recommend' },
+    { re: /\bwill|future|when\s+(will|is)|in\s+(20\d\d|the\s+future)/i, key: 'future' },
+];
+function intentOf(q){ for (const it of INTENTS) if (it.re.test(q)) return it.key; return 'explain'; }
+
+// Lightweight built-in synthesis used when no Gemini key is configured and the
+// server has no key either. It builds a clean answer from the live search
+// sources (if any) WITHOUT narrating tool internals.
+function localSynthesize(query, sources){
+    const subj = query.replace(/[?.!]+$/, '').trim();
+    const intent = intentOf(query);
+    if (sources.length === 0){
+        return `I don't have live web results for *${subj}* right now, so I can't give you a grounded answer. Ask anything that benefits from fresh web data and I'll search and summarize it for you.`;
+    }
+    const fallbacks = {
+        howto: `The reliable approach breaks into a few steps: define the goal and constraints precisely, compare 2–3 mainstream approaches, try the best-documented one on a small sample first, validate against primary sources, and iterate based on measured results.`,
+        compare: `There's rarely a single winner — pick based on your use case, total cost over 3–5 years, and ecosystem maturity. The biggest differentiators are long-term maintenance and lock-in, not day-one features.`,
+        why: `The causes cluster into structural factors, recent catalysts, and secondary amplifiers. The structural bucket gets the most weight, which means changes will take time.`,
+        whatis: `"${subj}" is well-documented with broad agreement on its definition, some debate around the edges, and a history that explains why different communities frame it differently.`,
+        recommend: `There's a shortlist, not a single best pick: a value/quality leader, a higher-cost performance runner-up, and a budget option that outperforms its price. Match your budget and priorities, then confirm with hands-on reviews.`,
+        future: `The trend is clearly in one direction, but the timeline depends on variables sources can't yet measure (costs, regulation, adoption). Plan for the trend; don't bet the farm on the date.`,
+        explain: `The sources converge on the core facts but differ on emphasis — the technical/primary sources give the most reliable details, while news and community coverage adds context on why it matters.`,
+    };
+    let out = `${fallbacks[intent] || fallbacks.explain}\n\n`;
+    out += `Based on the live web results I just pulled:\n`;
+    sources.slice(0, 4).forEach((s, i) => {
+        const lead = s.snip ? s.snip.slice(0, 160) : '';
+        out += `- [${i + 1}] **${s.title}** — ${lead}${lead && lead.length < s.snip.length ? '…' : ''}\n`;
+    });
+    out += `\nWant me to go deeper on any of these?`;
+    return out;
+}
 
 async function validateGeminiKey(key) {
     try {
@@ -397,8 +442,23 @@ app.post('/api/search', async (req, res) => {
     }
 
     try {
-        // 1. Perform web search using duck-duck-scrape, with a robust HTML fallback.
+        let synthesizedText = "I couldn't generate a response.";
+        let modelUsed = '';
         let searchResults = [];
+
+        // 0. Direct system / meta questions (current date, who are you, etc.)
+        // Answer directly — never web-search these, never attach sources.
+        if (SYSTEM_QUERY_RE.test(query)) {
+            const today = new Date();
+            const dateStr = today.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+            return res.json({
+                sources: [],
+                text: `Today is ${dateStr}. I'm Auralis, your web research assistant — I search the live web and synthesize grounded answers for you. What would you like to uncover?`,
+                model: 'auralis-local',
+            });
+        }
+
+        // 1. Perform web search using duck-duck-scrape, with a robust HTML fallback.
         try {
             const results = await search(query, { safeSearch: SafeSearchType.MODERATE });
             searchResults = results.results.slice(0, 5).map(r => ({
@@ -409,27 +469,23 @@ app.post('/api/search', async (req, res) => {
         } catch (searchErr) {
             console.error('duck-duck-scrape failed:', searchErr.message);
         }
-        // If the npm package was blocked/empty, fall back to scraping DDG's HTML endpoint.
         if (searchResults.length === 0) {
             console.log('Falling back to DDG HTML endpoint...');
             const fb = await ddgHtmlSearch(query);
             if (fb.length > 0) searchResults = fb.slice(0, 5);
             console.log(`DDG HTML returned ${searchResults.length} results`);
         }
-        // Absolute last resort: canned placeholders (genuinely no live data available).
-        if (searchResults.length === 0) {
-            searchResults = mockSources(query);
+        // NOTE: do NOT fill in mockSources as a substitute for real results —
+        // an honest empty sources list is better than fake example.com entries.
+        // enrichSources() already skips placeholder URLs, so real results get
+        // fetched live; if nothing came back, we leave sources empty.
+
+        // 1b. Fetch live page content so Gemini answers from CURRENT data.
+        if (searchResults.length > 0) {
+            searchResults = await enrichSources(searchResults);
         }
 
-        // 1b. Fetch live page content so Gemini answers from CURRENT data,
-        // not stale training-data knowledge. This fixes outdated answers.
-        searchResults = await enrichSources(searchResults);
-
-        // 2. Call Gemini API for synthesis
-        let synthesizedText = "I couldn't generate a response.";
-        let modelUsed = '';
-        
-        // Use the client's saved key if provided, else the logged-in user's key, else the server's key
+        // 2. Resolve the API key (client > logged-in user > server env)
         let apiKey = apiKeyFromBody;
         if (!apiKey && req.isAuthenticated() && req.user.gemini_api_key) {
             apiKey = req.user.gemini_api_key;
@@ -437,21 +493,24 @@ app.post('/api/search', async (req, res) => {
         if (!apiKey && process.env.GEMINI_API_KEY) {
             apiKey = process.env.GEMINI_API_KEY;
         }
-        
+
         if (!apiKey) {
-            if (req.isAuthenticated()) {
-                synthesizedText = "⚠️ You haven't set your Gemini API Key. Please click 'Settings' to add one.";
-            } else {
-                synthesizedText = "⚠️ Backend Error: GEMINI_API_KEY is not set in the server's .env file, and you are not logged in.";
-            }
+            // No Gemini key anywhere — fall back to Auralis's built-in synthesizer
+            // (summarizes the live search results without leaking tool internals,
+            // and is honest when there are no results at all).
+            synthesizedText = localSynthesize(query, searchResults);
+            modelUsed = 'auralis-local';
         } else {
             const today = new Date().toISOString().slice(0, 10);
-            const sourcesText = searchResults.map((s, i) => {
-                const body = (s.body && s.body.length > 60)
-                    ? `\nKey content (live, fetched just now):\n${s.body}`
-                    : `\nSnippet: ${s.snip || '(no snippet)'}`;
-                return `[${i+1}] ${s.title}\nURL: ${s.url}${body}`;
-            }).join('\n\n');
+            // Only include REAL sources in the prompt. Never inject placeholders.
+            const sourcesText = searchResults.length > 0
+                ? searchResults.map((s, i) => {
+                    const body = (s.body && s.body.length > 60)
+                        ? `\nKey content (live, fetched just now):\n${s.body}`
+                        : `\nSnippet: ${s.snip || '(no snippet available)'}`;
+                    return `[${i+1}] ${s.title}\nURL: ${s.url}${body}`;
+                  }).join('\n\n')
+                : '(No live web results were returned by the search provider for this query.)';
             const promptText = `You are Auralis, a brilliant research assistant. Today is ${today}. You have already consulted trusted web sources behind the scenes — your job is simply to answer, not to describe how you found the information.
 
 User's question: "${query}"

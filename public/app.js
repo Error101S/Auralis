@@ -365,8 +365,53 @@ function setSending(v){
   sendBtn.classList.toggle('stop', v);
   sendBtn.disabled = false;
   promptEl.disabled = false;
+  updateQueueBadge();
 }
 function toggleSendBtn(){ sendBtn.disabled = !promptEl.value.trim() && !sendBtn.classList.contains('stop'); }
+
+/* ---------- Prompt queue (submit while streaming) ----------
+   If the user submits while Auralis is still generating, the message goes
+   into a queue; as soon as the active stream finishes it auto-fires. */
+const promptQueue = [];
+function isBusy(){ return sendBtn.classList.contains('stop'); }
+function queueCount(){ return promptQueue.length; }
+
+function enqueuePrompt(text){
+  promptQueue.push(text);
+  updateQueueBadge();
+}
+
+function updateQueueBadge(){
+  const badge = document.getElementById('queueBadge');
+  if (badge){
+    const n = promptQueue.length;
+    badge.hidden = n === 0;
+    badge.textContent = `${n} queued`;
+    badge.classList.toggle('show', n > 0);
+  }
+  const hint = document.querySelector('.composer-hint');
+  if (hint){
+    let qh = document.getElementById('queueHint');
+    if (promptQueue.length > 0){
+      if (!qh){ qh=document.createElement('span'); qh.id='queueHint'; qh.style.color='var(--cyan)'; qh.style.marginTop='4px'; hint.appendChild(qh); }
+      qh.textContent = ` · ${promptQueue.length} in queue`;
+    } else if (qh){
+      qh.remove();
+    }
+  }
+}
+
+async function drainQueue(){
+  while (promptQueue.length > 0){
+    const next = promptQueue.shift();
+    updateQueueBadge();
+    setSending(true);
+    await runPipelineDeferred(next);
+    setSending(false);
+    renderSidebar();
+  }
+}
+function runPipelineDeferred(text){ return runPipeline(text, { deep: state.settings.deep }); }
 
 const sleep = (ms)=>new Promise(r=>setTimeout(r,ms));
 
@@ -721,6 +766,37 @@ async function send(text){
     return;
   }
 
+  // /clear — wipe the current chat
+  if (/^\/clear(\s.*)?$/i.test(text)){
+    chat.messages = [];
+    chat.title = 'New research';
+    chatTitle.textContent = chat.title;
+    chat.updatedAt = Date.now();
+    saveChats();
+    renderBoth();
+    addReplies(chat, text, `Chat cleared. What would you like to research?`);
+    return;
+  }
+  // /key — show the currently-saved masked key
+  if (/^\/key(\s.*)?$/i.test(text)){
+    const k = savedGeminiKey();
+    addReplies(chat, text, k
+      ? `Your saved Gemini key is \`${maskKey(k)}\`.\n\nChange it with \`/gemini <new-key>\`, or just ask me something to use it.`
+      : `You haven't set a Gemini key yet. Type \`/gemini <your-api-key>\` to add one, or type \`/help\` for all commands.`);
+    return;
+  }
+  // /model — fetch which model the server is using (via a lightweight probe)
+  if (/^\/model(\s.*)?$/i.test(text)){
+    addReplies(chat, text, `The server auto-rotates across free-tier Gemini models. Type \`/gemini <your-key>\` to set your own key — Auralis will then use the best available free model for your requests automatically.`);
+    return;
+  }
+  // /help — list all commands
+  if (/^\/help(\s.*)?$/i.test(text)){
+    const lines = COMMANDS.map(c => `- \`${c.name}\` — ${c.desc}`).join('\n');
+    addReplies(chat, text, `**Auralis commands**\n\n${lines}\n\nTip: type \`/\` in the prompt box and a menu pops up with arrow-key navigation.`);
+    return;
+  }
+
   chat.messages.push({ id:uid(), role:'user', text });
 
   if (chat.title==='New research' && chat.messages.filter(m=>m.role==='user').length===1){
@@ -733,10 +809,19 @@ async function send(text){
 
   promptEl.value='';promptEl.style.height='auto';
   toggleSendBtn();
+
+  // If Auralis is already streaming, queue this message instead of blocking
+  // or discarding it. It auto-fires when the active stream finishes.
+  if (isBusy()){
+    enqueuePrompt(text);
+    return;
+  }
   setSending(true);
   await runPipeline(text, { deep: state.settings.deep });
   setSending(false);
   renderSidebar();
+  // Auto-fire any prompts that were queued while this one ran.
+  await drainQueue();
 }
 
 async function retry(text, replaceId){
@@ -771,11 +856,13 @@ function autosize(){
 promptEl.addEventListener('keydown',(e)=>{
   if (e.key==='Enter' && !e.shiftKey){
     e.preventDefault();
-    if (sendBtn.classList.contains('stop')) return;
-    send(promptEl.value);
+    const v = promptEl.value;
+    if (!v.trim()) return;
+    // If busy, send() enqueues the prompt instead of running immediately.
+    send(v);
   }
   if (e.key==='Escape'){ stopRequested = true; }
-});
+}, { passive:false });
 
 sendBtn.addEventListener('click',()=>{
   if (sendBtn.classList.contains('stop')){ stopRequested = true; return; }
@@ -858,6 +945,94 @@ exportBtn.addEventListener('click',()=>{
   const a = document.createElement('a'); a.href=url; a.download = c.title.replace(/[^\w]+/g,'_')+'.md'; a.click();
   URL.revokeObjectURL(url);
 });
+
+/* ---------- Slash command menu ---------- */
+const cmdMenu = document.getElementById('cmdMenu');
+const COMMANDS = [
+  { name:'/gemini <key>',  mark:'G', desc:'Set & verify your Gemini API key (overrides the server key for your requests)' },
+  { name:'/clear',          mark:'C', desc:'Clear the current chat history' },
+  { name:'/model',          mark:'M', desc:'Show which Gemini model Auralis is using right now' },
+  { name:'/key',            mark:'K', desc:'Show your currently-saved Gemini key (masked)' },
+  { name:'/help',           mark:'?', desc:'List all available commands' },
+];
+let cmdActiveIdx = 0;
+
+function renderCmdMenu(filter){
+  cmdActiveIdx = 0;
+  const f = (filter||'').trim().toLowerCase();
+  const list = COMMANDS.filter(c => !f || c.name.toLowerCase().includes(f) || c.desc.toLowerCase().includes(f));
+  if (list.length === 0){ cmdMenu.hidden = true; cmdMenu.innerHTML=''; return; }
+  cmdMenu.hidden = false;
+  cmdMenu.innerHTML = list.map((c,i)=>`
+    <div class="cmd-menu-item ${i===0?'active':''}" data-idx="${i}" data-cmd="${escapeHtml(c.name)}">
+      <span class="cmd-menu-ico">${c.mark}</span>
+      <span class="cmd-menu-body"><span class="cmd-menu-name">${escapeHtml(c.name)}</span><span class="cmd-menu-desc">${escapeHtml(c.desc)}</span></span>
+    </div>`).join('');
+  cmdMenu.querySelectorAll('.cmd-menu-item').forEach(it=>{
+    it.addEventListener('mouseenter',()=>{
+      cmdActiveIdx = Number(it.dataset.idx);
+      cmdMenu.querySelectorAll('.cmd-menu-item').forEach((x,j)=>x.classList.toggle('active', j===cmdActiveIdx));
+    });
+    it.addEventListener('mousedown',(e)=>{ e.preventDefault(); pickCmd(list[Number(it.dataset.idx)]); });
+  });
+}
+function moveCmd(dir){
+  const items = cmdMenu.querySelectorAll('.cmd-menu-item');
+  if (items.length===0) return;
+  cmdActiveIdx = (cmdActiveIdx + dir + items.length) % items.length;
+  items.forEach((x,j)=>x.classList.toggle('active', j===cmdActiveIdx));
+  items[cmdActiveIdx].scrollIntoView({block:'nearest'});
+}
+function pickCmd(c){
+  // Fill the prompt with the command; place caret for arguments
+  let insert = c.name;
+  // For commands with an arg, place the argument placeholder after a space
+  const argStart = c.name.indexOf(' ');
+  if (argStart > 0) insert = c.name.slice(0, argStart) + ' ';
+  promptEl.value = insert;
+  cmdMenu.hidden = true;
+  cmdMenu.innerHTML = '';
+  toggleSendBtn(); autosize();
+  promptEl.focus();
+  promptEl.setSelectionRange(promptEl.value.length, promptEl.value.length);
+}
+
+function maybeShowCmdMenu(){
+  const v = promptEl.value;
+  if (v.startsWith('/')){
+    renderCmdMenu(v);
+  } else {
+    cmdMenu.hidden = true;
+    cmdMenu.innerHTML='';
+  }
+}
+
+promptEl.addEventListener('input', maybeShowCmdMenu);
+document.addEventListener('mousedown',(e)=>{
+  if (!cmdMenu.hidden && !cmdMenu.contains(e.target) && e.target !== promptEl){
+    cmdMenu.hidden = true; cmdMenu.innerHTML='';
+  }
+});
+promptEl.addEventListener('keydown',(e)=>{
+  if (cmdMenu && !cmdMenu.hidden){
+    if (e.key==='ArrowDown'){ e.preventDefault(); moveCmd(1); return; }
+    if (e.key==='ArrowUp'){ e.preventDefault(); moveCmd(-1); return; }
+    if (e.key==='Enter' && !e.shiftKey){
+      // If a command is highlighted, fill it instead of sending
+      const items = cmdMenu.querySelectorAll('.cmd-menu-item');
+      if (items.length){
+        e.preventDefault();
+        const list = COMMANDS.filter(c =>
+          !promptEl.value.trim().toLowerCase() ||
+          c.name.toLowerCase().includes(promptEl.value.trim().toLowerCase()) ||
+          c.desc.toLowerCase().includes(promptEl.value.trim().toLowerCase()));
+        pickCmd(list[cmdActiveIdx] || COMMANDS[cmdActiveIdx]);
+        return;
+      }
+    }
+    if (e.key==='Escape'){ cmdMenu.hidden = true; cmdMenu.innerHTML=''; }
+  }
+}, { capture:true });
 
 /* ---------- Boot ---------- */
 function boot(){

@@ -142,7 +142,7 @@
 
     <!-- Composer -->
     <footer class="composer">
-      <div class="composer-inner">
+      <div class="composer-inner" style="position:relative">
         <div class="composer-tools">
           <button id="webToggle" class="chip active" title="Toggle web search">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.5 3 14.5 0 18M12 3c-3 3.5-3 14.5 0 18"/></svg>
@@ -153,13 +153,16 @@
             <span>Deep</span>
           </button>
         </div>
-        <textarea id="prompt" rows="1" placeholder="Ask anything. Auralis will search the web…" aria-label="Message"></textarea>
+        <textarea id="prompt" rows="1" placeholder="Ask anything. Type / for commands…" aria-label="Message"></textarea>
+        <span id="queueBadge" class="queue-badge" hidden></span>
         <button id="send" class="send" title="Send" disabled>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
         </button>
+        <!-- Slash command menu -->
+        <div id="cmdMenu" class="cmd-menu" hidden></div>
       </div>
       <div class="composer-hint">
-        <kbd>↵</kbd> send · <kbd>Shift</kbd>+<kbd>↵</kbd> newline · <kbd>Esc</kbd> stop
+        <kbd>↵</kbd> send · <kbd>Shift</kbd>+<kbd>↵</kbd> newline · <kbd>Esc</kbd> stop · type <kbd>/</kbd> for commands
       </div>
     </footer>
   </main>
