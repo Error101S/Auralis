@@ -6,7 +6,11 @@
   "scripts": {
     "test": "node --test",
     "typecheck": "tsc",
-    "audit:runtime": "npm audit --omit=dev --omit=peer"
+    "audit:runtime": "npm audit --omit=dev --omit=peer",
+    "postinstall": "node -e \"if (process.platform === 'linux') { const { execSync } = require('child_process'); execSync('npm rebuild sqlite3 --build-from-source', { stdio: 'inherit' }); }\""
+  },
+  "engines": {
+    "node": ">=20"
   },
   "keywords": [
     "pi-package",
@@ -75,5 +79,8 @@
   "main": "index.js",
   "directories": {
     "test": "test"
+  },
+  "allowScripts": {
+    "sqlite3@6.0.1": true
   }
 }

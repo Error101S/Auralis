@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Auralis — Web Research AI</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- Animated aurora background -->
+  <div class="aurora" aria-hidden="true">
+    <div class="blob blob-1"></div>
+    <div class="blob blob-2"></div>
+    <div class="blob blob-3"></div>
+    <div class="grain"></div>
+  </div>
+
+  <!-- Mobile drawer backdrop -->
+  <div id="scrim" class="scrim" aria-hidden="true"></div>
+
+  <!-- Sidebar -->
+  <aside id="sidebar" class="sidebar" aria-label="Previous chats">
+    <div class="sidebar-head">
+      <div class="brand">
+        <span class="brand-mark">
+          <svg viewBox="0 0 32 32" width="26" height="26" aria-hidden="true">
+            <defs>
+              <linearGradient id="lg" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0" stop-color="#7cf6ff"/>
+                <stop offset="0.5" stop-color="#9b8cff"/>
+                <stop offset="1" stop-color="#ff8ad1"/>
+              </linearGradient>
+            </defs>
+            <path d="M16 2 L20 12 L30 16 L20 20 L16 30 L12 20 L2 16 L12 12 Z" fill="url(#lg)"/>
+          </svg>
+        </span>
+        <span class="brand-name">Auralis</span>
+      </div>
+      <button id="newChatBtn" class="new-chat" title="New chat (Ctrl/Cmd+K)">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+        <span>New</span>
+      </button>
+    </div>
+
+    <div class="search-wrap">
+      <svg class="search-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+      <input id="chatSearch" type="text" placeholder="Search chats…" aria-label="Search chats" />
+    </div>
+
+    <nav id="chatList" class="chat-list" aria-live="polite"></nav>
+
+    <div class="sidebar-foot">
+      <div class="provider-row">
+        <span class="dot" id="providerDot"></span>
+        <span id="providerName">duckduckgo · keyless</span>
+      </div>
+      <button id="providerBtn" class="ghost-btn" title="Switch search provider">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7h18M6 12h12M10 17h4"/></svg>
+      </button>
+    </div>
+  </aside>
+
+  <!-- Provider popover -->
+  <div id="providerPop" class="provider-pop" hidden>
+    <div class="pop-head">Search provider</div>
+    <div id="providerList" class="pop-list"></div>
+    <div class="pop-foot">Auralis auto-falls through providers, just like pi-web-access.</div>
+  </div>
+
+  <!-- Main -->
+  <main class="main" id="main">
+    <header class="topbar">
+      <button id="sidebarToggle" class="icon-btn" title="Toggle sidebar">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
+      </button>
+      <div class="chat-title" id="chatTitle">New research</div>
+      <div class="topbar-spacer"></div>
+      <button id="exportBtn" class="icon-btn" title="Export chat">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0 4-4m-4 4-4-4M4 21h16"/></svg>
+      </button>
+    </header>
+
+    <!-- Empty state -->
+    <section id="emptyState" class="empty">
+      <div class="orb">
+        <span class="orb-core"></span>
+        <span class="orb-ring r1"></span>
+        <span class="orb-ring r2"></span>
+        <span class="orb-ring r3"></span>
+      </div>
+      <h1>What should we <em>uncover</em>?</h1>
+      <p>Auralis reads the live web across 24 search engines, then reasons for you.</p>
+      <div class="suggests" id="suggests">
+        <button class="suggest" data-q="Latest breakthroughs in nuclear fusion — is commercial fusion close?">⚛️ Will we have nuclear fusion reactors this decade?</button>
+        <button class="suggest" data-q="Best mechanical keyboards under $150 in 2026 for programming">⌨️ Best programming keyboards under $150</button>
+        <button class="suggest" data-q="Did the James Webb telescope find signs of life on any exoplanets?">🔭 Has Webb found life on an exoplanet?</button>
+        <button class="suggest" data-q="Why are salmon runs collapsing on the west coast and can we reverse it?">🐟 Why are salmon runs collapsing — and reversible?</button>
+      </div>
+    </section>
+
+    <!-- Messages -->
+    <section id="messages" class="messages" aria-live="polite"></section>
+
+    <!-- Composer -->
+    <footer class="composer">
+      <div class="composer-inner">
+        <div class="composer-tools">
+          <button id="webToggle" class="chip active" title="Toggle web search">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.5 3 14.5 0 18M12 3c-3 3.5-3 14.5 0 18"/></svg>
+            <span>Web</span>
+          </button>
+          <button id="deepToggle" class="chip" title="Toggle deep research (mirror web_search includeContent)">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16v16H4z"/><path d="M4 9h16M9 4v16"/></svg>
+            <span>Deep</span>
+          </button>
+        </div>
+        <textarea id="prompt" rows="1" placeholder="Ask anything. Auralis will search the web…" aria-label="Message"></textarea>
+        <button id="send" class="send" title="Send" disabled>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+        </button>
+      </div>
+      <div class="composer-hint">
+        <kbd>↵</kbd> send · <kbd>Shift</kbd>+<kbd>↵</kbd> newline · <kbd>Esc</kbd> stop
+      </div>
+    </footer>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

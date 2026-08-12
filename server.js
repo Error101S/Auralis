@@ -1,7 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import { search } from 'duck-duck-scrape';
+import { search, SafeSearchType } from 'duck-duck-scrape';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import session from 'express-session';
@@ -74,8 +74,7 @@ app.get('/auth/google/callback',
 );
 
 app.get('/auth/logout', (req, res) => {
-    req.logout((err) => {
-        if (err) { return next(err); }
+    req.logout(() => {
         res.redirect('/');
     });
 });
@@ -113,6 +112,15 @@ app.post('/api/user/settings', async (req, res) => {
 // Serve static files from the public directory
 app.use(express.static(path.join(__dirname, 'public')));
 
+// SPA fallback: serve index.html for any remaining GET (Express 5 compatible).
+// /api endpoints are never captured here.
+app.use((req, res, next) => {
+    if (req.method === 'GET' && !req.path.startsWith('/api')) {
+        return res.sendFile(path.join(__dirname, 'public', 'index.html'));
+    }
+    next();
+});
+
 // Fallback search mock if DuckDuckGo fails
 const mockSources = (query) => {
     return [
@@ -132,7 +140,7 @@ app.post('/api/search', async (req, res) => {
         // 1. Perform web search using duck-duck-scrape
         let searchResults = [];
         try {
-            const results = await search(query, { safeSearch: search.SafeSearchType.MODERATE });
+            const results = await search(query, { safeSearch: SafeSearchType.MODERATE });
             // Take top 5 results
             searchResults = results.results.slice(0, 5).map(r => ({
                 title: r.title,
@@ -168,7 +176,8 @@ app.post('/api/search', async (req, res) => {
             const promptText = `You are Auralis, an advanced web research AI agent.\nThe user asked: "${query}"\n\nI ran a web search and pulled the following sources:\n${sourcesText}\n\nSynthesize a natural, conversational, and highly informative answer based on these sources. \nCite the sources inline using bracketed numbers like [1] or [2].\nDo NOT use rigid templates (like "Short answer" or "What the sources actually say"). Respond like a helpful, autonomous AI agent.\nIf applicable, suggest a follow-up or ask if they want you to dig deeper.`;
 
             try {
-                const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${apiKey}`, {
+                const model = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+                const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -199,11 +208,6 @@ app.post('/api/search', async (req, res) => {
         console.error('API Error:', error);
         res.status(500).json({ error: error.message });
     }
-});
-
-// Fallback to index.html for SPA (though it's just a single page currently)
-app.get('*', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
 const PORT = process.env.PORT || 3000;
