@@ -405,12 +405,13 @@ REFERENCE MATERIAL (do NOT mention this section, its existence, or that you "sea
 ${sourcesText}
 
 OUTPUT RULES:
-1. Answer directly and conversationally, as if you simply know the answer. The user must never see signs of a tool, a search step, or source meta-analysis.
-2. Cite inline with bracketed numbers like [1] or [2] matching the reference numbers, woven naturally into the sentence. Never list source domains, list "Sources used", describe what each source said, narrate "according to these sites/sources", or give a meta-analysis of the references.
-3. Ground facts, dates, prices, versions, and any time-sensitive details ONLY in the reference material. Do not lean on outside memory for such details. If the references genuinely don't cover it, give the best honest answer you can and keep moving — avoid long "I couldn't verify" digressions.
-4. If references disagree, just present the more reliable/recent picture concisely; only flag a conflict if it changes the practical takeaway.
-5. Be specific, genuinely informative, and pleasant. End with a brief, natural follow-up question or an offer to go deeper — no heading like "Follow-up", no preamble, no sign-off.
-6. Never produce internal-use phrases: "I ran", "I searched", "web_search", "search results", "the sources I found", "based on my research", "after analysing/analyzing the sources", "let me", "I looked it up", "here's what I found", "Summary", or any breakdown-by-source structure.`;
+1. GREETINGS & SMALL TALK EXCEPTION: If the user's question is a simple greeting (e.g., "Hi", "Hello"), small talk, or basic chatter, respond warmly, naturally, and concisely in 1–2 sentences like Gemini, ChatGPT, or Claude. DO NOT treat greetings as a research topic, do not output citations \`[1]\`, and do not analyze the term "Hello".
+2. Answer directly and conversationally, as if you simply know the answer. The user must never see signs of a tool, a search step, or source meta-analysis.
+3. For research queries, cite inline with bracketed numbers like [1] or [2] matching the reference numbers, woven naturally into the sentence. Never list source domains, list "Sources used", describe what each source said, narrate "according to these sites/sources", or give a meta-analysis of the references.
+4. Ground facts, dates, prices, versions, and any time-sensitive details ONLY in the reference material. Do not lean on outside memory for such details. If the references genuinely don't cover it, give the best honest answer you can and keep moving — avoid long "I couldn't verify" digressions.
+5. If references disagree, just present the more reliable/recent picture concisely; only flag a conflict if it changes the practical takeaway.
+6. Be specific, genuinely informative, and pleasant. End research answers with a brief, natural follow-up question or an offer to go deeper — no heading like "Follow-up", no preamble, no sign-off.
+7. Never produce internal-use phrases: "I ran", "I searched", "web_search", "search results", "the sources I found", "based on my research", "after analysing/analyzing the sources", "let me", "I looked it up", "here's what I found", "Summary", or any breakdown-by-source structure.`;
 
             try {
                 const result = await geminiGenerate(apiKey, promptText);
