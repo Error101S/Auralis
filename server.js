@@ -130,8 +130,50 @@ const mockSources = (query) => {
     ];
 };
 
+async function validateGeminiKey(key) {
+    try {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 8000);
+        const model = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+        const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: 'Reply with OK' }] }] })
+        });
+        clearTimeout(timer);
+        return { ok: r.ok, status: r.status };
+    } catch {
+        return { ok: false, status: 0 };
+    }
+}
+
+app.post('/api/gemini-key', async (req, res) => {
+    const { apiKey } = req.body;
+    if (!apiKey || typeof apiKey !== 'string' || !apiKey.trim()) {
+        return res.status(400).json({ error: 'apiKey is required' });
+    }
+    // Save to the signed-in user's account if logged in
+    if (req.isAuthenticated()) {
+        try {
+            await updateUserApiKey(req.user.id, apiKey.trim());
+        } catch (err) {
+            return res.status(500).json({ error: 'Failed to save to your account' });
+        }
+    }
+    // Verify the key against the Gemini API
+    const check = await validateGeminiKey(apiKey.trim());
+    if (check.status === 400 || check.status === 401 || check.status === 403) {
+        return res.status(400).json({ error: 'Invalid Gemini API key — Gemini rejected it.' });
+    }
+    if (!check.ok) {
+        // Network error: can't verify, but still accept the key.
+        return res.json({ success: true, verified: false });
+    }
+    res.json({ success: true, verified: true });
+});
+
 app.post('/api/search', async (req, res) => {
-    const { query } = req.body;
+    const { query, apiKey: apiKeyFromBody } = req.body;
     if (!query) {
         return res.status(400).json({ error: 'Query is required' });
     }
@@ -159,10 +201,13 @@ app.post('/api/search', async (req, res) => {
         // 2. Call Gemini API for synthesis
         let synthesizedText = "I couldn't generate a response.";
         
-        // Use the logged-in user's API key if available, otherwise fallback to server's key
-        let apiKey = process.env.GEMINI_API_KEY;
-        if (req.isAuthenticated() && req.user.gemini_api_key) {
+        // Use the client's saved key if provided, else the logged-in user's key, else the server's key
+        let apiKey = apiKeyFromBody;
+        if (!apiKey && req.isAuthenticated() && req.user.gemini_api_key) {
             apiKey = req.user.gemini_api_key;
+        }
+        if (!apiKey && process.env.GEMINI_API_KEY) {
+            apiKey = process.env.GEMINI_API_KEY;
         }
         
         if (!apiKey) {

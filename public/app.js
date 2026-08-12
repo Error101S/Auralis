@@ -349,7 +349,7 @@ async function apiSearch(query){
     const res = await fetch('/api/search', {
       method:'POST',
       headers:{ 'Content-Type':'application/json' },
-      body: JSON.stringify({ query }),
+      body: JSON.stringify({ query, apiKey: savedGeminiKey() || undefined }),
       signal: ctrl.signal,
     });
     clearTimeout(timer);
@@ -369,6 +369,49 @@ function normalizeSources(raw){
     favicon: hostOf(s.url),
     snippet: s.snip || s.description || '',
   }));
+}
+
+/* ---------- Gemini API key management (/gemini <key>) ---------- */
+const KEY_STORAGE = 'auralis.geminiKey';
+function savedGeminiKey(){ return localStorage.getItem(KEY_STORAGE) || ''; }
+function maskKey(k){
+  k = (k||'').trim();
+  if (k.length <= 8) return k.slice(0,2) + '…';
+  return k.slice(0,4) + '…' + k.slice(-3);
+}
+function updateProviderStatus(){
+  providerName.textContent = savedGeminiKey() ? 'gemini · key set' : 'duckduckgo + gemini';
+}
+async function saveGeminiKey(key){
+  key = key.trim();
+  localStorage.setItem(KEY_STORAGE, key);
+  updateProviderStatus();
+  try {
+    const res = await fetch('/api/gemini-key', {
+      method:'POST',
+      headers:{ 'Content-Type':'application/json' },
+      body: JSON.stringify({ apiKey: key }),
+    });
+    if (res.ok){
+      const data = await res.json();
+      return { rejected:false, verified: !!data.verified };
+    }
+    const data = await res.json().catch(()=>({}));
+    return { rejected:true, message: data.error || 'The server rejected the key.' };
+  } catch {
+    // No server (file:// or offline) — saved locally only.
+    return { rejected:false, verified:false };
+  }
+}
+function addReplies(chat, userText, aiText){
+  const now = Date.now();
+  chat.updatedAt = now;
+  chat.messages.push({ id:uid(), role:'user', text: userText, at: now });
+  chat.messages.push({ id:uid(), role:'ai', text: aiText, sources:[], provider:'', at: now });
+  saveChats();
+  renderBoth();
+  promptEl.value='';promptEl.style.height='auto';
+  toggleSendBtn();
 }
 
 /* ---------- Offline demo engine (fallback when no server) ---------- */
@@ -624,6 +667,25 @@ async function send(text){
   let chat = currentChat();
   if (!chat){ newChat(); chat = currentChat(); }
 
+  // /gemini <api-key> command: save the key instead of doing a search
+  const cmd = text.match(/^\/gemini(\s+\S[\s\S]*)$/i);
+  if (cmd){
+    const key = cmd[1].trim();
+    if (!key){
+      addReplies(chat, text, `**Usage:** \`/gemini <your-api-key>\`\n\nPaste your key from [aistudio.google.com/apikey](https://aistudio.google.com/apikey).`);
+      return;
+    }
+    chat.title = 'Gemini API key';
+    chatTitle.textContent = chat.title;
+    chat.updatedAt = Date.now();
+    const info = await saveGeminiKey(key);
+    const aiText = info.rejected
+      ? `**⚠️ ${info.message}**\n\nYour key wasn't saved. Make sure it's the full key from [aistudio.google.com/apikey](https://aistudio.google.com/apikey), then try again.`
+      : `**✅ Gemini API key saved**${info.verified ? ' and verified against the Gemini API — it works.' : ' (stored locally — I couldn\'t verify it right now).'}\n\n\`${maskKey(key)}\`\nYour next search will use this key. Use \`/gemini <new-key>\` anytime to change it.`;
+    addReplies(chat, text, aiText);
+    return;
+  }
+
   chat.messages.push({ id:uid(), role:'user', text });
 
   if (chat.title==='New research' && chat.messages.filter(m=>m.role==='user').length===1){
@@ -765,7 +827,7 @@ exportBtn.addEventListener('click',()=>{
 /* ---------- Boot ---------- */
 function boot(){
   loadState();
-  providerName.textContent = 'duckduckgo + gemini';
+  updateProviderStatus();
   webToggle.classList.toggle('active', state.settings.web);
   deepToggle.classList.toggle('active', state.settings.deep);
   if (state.chats.length===0){
