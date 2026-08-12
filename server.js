@@ -121,6 +121,60 @@ app.use((req, res, next) => {
     next();
 });
 
+// Free-tier Gemini model preference (highest free limits first).
+// Order: 3.1-flash-lite (500 RPD), 3.5-flash-lite (500 RPD), 3.6-flash, 3-flash, 2.5-flash-lite.
+const GEMINI_MODEL_FALLBACKS = [
+    'gemini-3.1-flash-lite',
+    'gemini-3.5-flash-lite',
+    'gemini-3.6-flash',
+    'gemini-3-flash',
+    'gemini-2.5-flash-lite',
+];
+const GEMINI_MODEL_DEFAULT = process.env.GEMINI_MODEL || GEMINI_MODEL_FALLBACKS[0];
+// Detect "no longer available" / model-deprecated style errors so we can retry.
+const DEPRECATED_RE = /no longer available|not found|not supported|deprecat/i;
+
+async function geminiGenerate(apiKey, prompt, { timeout = 20000 } = {}) {
+    const tried = new Set();
+    const queue = [GEMINI_MODEL_DEFAULT, ...GEMINI_MODEL_FALLBACKS.filter(m => m !== GEMINI_MODEL_DEFAULT)];
+    for (const model of queue) {
+        if (tried.has(model)) continue;
+        tried.add(model);
+        try {
+            const ctrl = new AbortController();
+            const timer = setTimeout(() => ctrl.abort(), timeout);
+            const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: prompt }] }] }),
+                signal: ctrl.signal,
+            });
+            clearTimeout(timer);
+            if (r.ok) {
+                const data = await r.json();
+                const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+                return { ok: true, model, text };
+            }
+            let errBody;
+            try { errBody = await r.json(); } catch { errBody = null; }
+            const msg = errBody?.error?.message || r.statusText;
+            // If the model is deprecated/unavailable, try the next one.
+            if (r.status === 404 || (r.status === 400 && DEPRECATED_RE.test(msg))) {
+                continue;
+            }
+            // Other errors (rate limit, invalid key, content filter) are real — bubble up.
+            return { ok: false, model, status: r.status, error: msg };
+        } catch (e) {
+            // Network/abort — try next model once, but don't loop forever on net errors.
+            if (e.name === 'AbortError' || /fetch|network/i.test(e.message)) {
+                continue;
+            }
+            return { ok: false, model, error: e.message };
+        }
+    }
+    return { ok: false, model: null, error: 'All candidate Gemini models were unavailable.' };
+}
+
 // Fallback search mock if DuckDuckGo fails
 const mockSources = (query) => {
     return [
@@ -134,14 +188,19 @@ async function validateGeminiKey(key) {
     try {
         const ctrl = new AbortController();
         const timer = setTimeout(() => ctrl.abort(), 8000);
-        const model = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
-        const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`, {
+        const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL_DEFAULT}:generateContent?key=${key}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: 'Reply with OK' }] }] })
         });
         clearTimeout(timer);
-        return { ok: r.ok, status: r.status };
+        if (r.ok) return { ok: true, status: 200 };
+        let msg;
+        try { msg = (await r.json())?.error?.message || ''; } catch { msg = ''; }
+        // A deprecated-model error means the KEY itself is valid (the account works).
+        const deprecated = r.status === 404 || (r.status === 400 && DEPRECATED_RE.test(msg));
+        if (deprecated) return { ok: true, status: 200 };
+        return { ok: false, status: r.status };
     } catch {
         return { ok: false, status: 0 };
     }
@@ -221,21 +280,11 @@ app.post('/api/search', async (req, res) => {
             const promptText = `You are Auralis, an advanced web research AI agent.\nThe user asked: "${query}"\n\nI ran a web search and pulled the following sources:\n${sourcesText}\n\nSynthesize a natural, conversational, and highly informative answer based on these sources. \nCite the sources inline using bracketed numbers like [1] or [2].\nDo NOT use rigid templates (like "Short answer" or "What the sources actually say"). Respond like a helpful, autonomous AI agent.\nIf applicable, suggest a follow-up or ask if they want you to dig deeper.`;
 
             try {
-                const model = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
-                const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        contents: [{ role: 'user', parts: [{ text: promptText }] }]
-                    })
-                });
-                
-                if (response.ok) {
-                    const data = await response.json();
-                    synthesizedText = data.candidates?.[0]?.content?.parts?.[0]?.text || "No response generated.";
+                const result = await geminiGenerate(apiKey, promptText);
+                if (result.ok) {
+                    synthesizedText = result.text || "No response generated.";
                 } else {
-                    const err = await response.json();
-                    synthesizedText = `⚠️ Gemini API Error: ${err.error?.message || response.statusText}`;
+                    synthesizedText = `⚠️ Gemini API Error: ${result.error || 'unknown error'}`;
                 }
             } catch (err) {
                 console.error("Gemini fetch error:", err);
