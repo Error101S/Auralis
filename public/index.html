@@ -26,30 +26,26 @@
     <div class="sidebar-head">
       <div class="brand">
         <span class="brand-mark auralis-logo" data-state="idle">
-          <svg viewBox="0 0 48 48" width="28" height="28" aria-hidden="true">
+          <svg class="al-svg" viewBox="0 0 100 100" width="30" height="30" aria-hidden="true">
             <defs>
-              <linearGradient id="auroraGrad" x1="0" y1="0" x2="1" y2="1">
-                <stop offset="0" stop-color="#7cf6ff"/>
-                <stop offset="0.5" stop-color="#9b8cff"/>
-                <stop offset="1" stop-color="#ff8ad1"/>
+              <linearGradient id="algSide" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0" stop-color="#7cf6ff"/><stop offset="0.5" stop-color="#9b8cff"/><stop offset="1" stop-color="#ff8ad1"/>
               </linearGradient>
-              <linearGradient id="auroraGrad2" x1="0" y1="1" x2="1" y2="0">
-                <stop offset="0" stop-color="#7cf6ff" stop-opacity="0.9"/>
-                <stop offset="1" stop-color="#ff8ad1" stop-opacity="0.9"/>
-              </linearGradient>
+              <radialGradient id="alrSide" cx="0.5" cy="0.5" r="0.5">
+                <stop offset="0" stop-color="#9b8cff" stop-opacity="0.35"/><stop offset="1" stop-color="#9b8cff" stop-opacity="0"/>
+              </radialGradient>
             </defs>
-            <g class="logo-arcs">
-              <path class="arc arc-1" d="M5 16 A18 18 0 0 1 5 32" fill="none" stroke="url(#auroraGrad)" stroke-width="2.6" stroke-linecap="round" opacity="0.55"/>
-              <path class="arc arc-2" d="M2 12 A24 24 0 0 1 2 36" fill="none" stroke="url(#auroraGrad)" stroke-width="2.2" stroke-linecap="round" opacity="0.32"/>
-              <path class="arc arc-3" d="M10 20 A12 12 0 0 1 10 28" fill="none" stroke="url(#auroraGrad)" stroke-width="2.4" stroke-linecap="round" opacity="0.8"/>
+            <circle class="al-glow" cx="50" cy="50" r="44" fill="url(#alrSide)"/>
+            <g class="al-ring">
+              <circle class="al-ring-track" cx="50" cy="50" r="42" fill="none" stroke="url(#algSide)" stroke-width="2" stroke-opacity="0.18"/>
+              <circle class="al-ring-arc" cx="50" cy="50" r="42" fill="none" stroke="url(#algSide)" stroke-width="3" stroke-linecap="round" stroke-dasharray="120 144" pathLength="264"/>
             </g>
-            <g class="logo-arcs-right" transform="translate(48 0) scale(-1 1)">
-              <path class="arc arc-1" d="M5 16 A18 18 0 0 1 5 32" fill="none" stroke="url(#auroraGrad2)" stroke-width="2.6" stroke-linecap="round" opacity="0.55"/>
-              <path class="arc arc-2" d="M2 12 A24 24 0 0 1 2 36" fill="none" stroke="url(#auroraGrad2)" stroke-width="2.2" stroke-linecap="round" opacity="0.32"/>
-              <path class="arc arc-3" d="M10 20 A12 12 0 0 1 10 28" fill="none" stroke="url(#auroraGrad2)" stroke-width="2.4" stroke-linecap="round" opacity="0.8"/>
+            <g class="al-A">
+              <path class="al-A-left" d="M50 22 L30 74" fill="none" stroke="url(#algSide)" stroke-width="6" stroke-linecap="round"/>
+              <path class="al-A-right" d="M50 22 L70 74" fill="none" stroke="url(#algSide)" stroke-width="6" stroke-linecap="round"/>
+              <path class="al-A-bar" d="M37 54 L63 54" fill="none" stroke="url(#algSide)" stroke-width="5" stroke-linecap="round"/>
             </g>
-            <path class="logo-core" d="M24 9 C30 18, 30 30, 24 39 C18 30, 18 18, 24 9 Z" fill="url(#auroraGrad)"/>
-            <ellipse class="logo-spark" cx="24" cy="24" rx="3.2" ry="6" fill="#ffffff" opacity="0.85"/>
+            <circle class="al-spark" cx="50" cy="22" r="3.4" fill="#ffffff"/>
           </svg>
         </span>
         <span class="brand-name">Auralis</span>
@@ -101,30 +97,26 @@
     <!-- Empty state -->
     <section id="emptyState" class="empty">
       <div class="auralis-logo logo-hero" data-state="idle">
-        <svg viewBox="0 0 48 48" width="96" height="96" aria-hidden="true">
+        <svg class="al-svg" viewBox="0 0 100 100" width="104" height="104" aria-hidden="true">
           <defs>
-            <linearGradient id="auroraGradHero" x1="0" y1="0" x2="1" y2="1">
-              <stop offset="0" stop-color="#7cf6ff"/>
-              <stop offset="0.5" stop-color="#9b8cff"/>
-              <stop offset="1" stop-color="#ff8ad1"/>
+            <linearGradient id="algHero" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0" stop-color="#7cf6ff"/><stop offset="0.5" stop-color="#9b8cff"/><stop offset="1" stop-color="#ff8ad1"/>
             </linearGradient>
-            <linearGradient id="auroraGradHero2" x1="0" y1="1" x2="1" y2="0">
-              <stop offset="0" stop-color="#7cf6ff" stop-opacity="0.9"/>
-              <stop offset="1" stop-color="#ff8ad1" stop-opacity="0.9"/>
-            </linearGradient>
+            <radialGradient id="alrHero" cx="0.5" cy="0.5" r="0.5">
+              <stop offset="0" stop-color="#9b8cff" stop-opacity="0.4"/><stop offset="1" stop-color="#9b8cff" stop-opacity="0"/>
+            </radialGradient>
           </defs>
-          <g class="logo-arcs">
-            <path class="arc arc-1" d="M5 16 A18 18 0 0 1 5 32" fill="none" stroke="url(#auroraGradHero)" stroke-width="2.6" stroke-linecap="round" opacity="0.55"/>
-            <path class="arc arc-2" d="M2 12 A24 24 0 0 1 2 36" fill="none" stroke="url(#auroraGradHero)" stroke-width="2.2" stroke-linecap="round" opacity="0.32"/>
-            <path class="arc arc-3" d="M10 20 A12 12 0 0 1 10 28" fill="none" stroke="url(#auroraGradHero)" stroke-width="2.4" stroke-linecap="round" opacity="0.8"/>
+          <circle class="al-glow" cx="50" cy="50" r="46" fill="url(#alrHero)"/>
+          <g class="al-ring">
+            <circle class="al-ring-track" cx="50" cy="50" r="42" fill="none" stroke="url(#algHero)" stroke-width="2" stroke-opacity="0.18"/>
+            <circle class="al-ring-arc" cx="50" cy="50" r="42" fill="none" stroke="url(#algHero)" stroke-width="3.4" stroke-linecap="round" stroke-dasharray="120 144" pathLength="264"/>
           </g>
-          <g class="logo-arcs-right" transform="translate(48 0) scale(-1 1)">
-            <path class="arc arc-1" d="M5 16 A18 18 0 0 1 5 32" fill="none" stroke="url(#auroraGradHero2)" stroke-width="2.6" stroke-linecap="round" opacity="0.55"/>
-            <path class="arc arc-2" d="M2 12 A24 24 0 0 1 2 36" fill="none" stroke="url(#auroraGradHero2)" stroke-width="2.2" stroke-linecap="round" opacity="0.32"/>
-            <path class="arc arc-3" d="M10 20 A12 12 0 0 1 10 28" fill="none" stroke="url(#auroraGradHero2)" stroke-width="2.4" stroke-linecap="round" opacity="0.8"/>
+          <g class="al-A">
+            <path class="al-A-left" d="M50 22 L30 74" fill="none" stroke="url(#algHero)" stroke-width="6.5" stroke-linecap="round"/>
+            <path class="al-A-right" d="M50 22 L70 74" fill="none" stroke="url(#algHero)" stroke-width="6.5" stroke-linecap="round"/>
+            <path class="al-A-bar" d="M37 54 L63 54" fill="none" stroke="url(#algHero)" stroke-width="5.5" stroke-linecap="round"/>
           </g>
-          <path class="logo-core" d="M24 9 C30 18, 30 30, 24 39 C18 30, 18 18, 24 9 Z" fill="url(#auroraGradHero)"/>
-          <ellipse class="logo-spark" cx="24" cy="24" rx="3.2" ry="6" fill="#ffffff" opacity="0.85"/>
+          <circle class="al-spark" cx="50" cy="22" r="3.8" fill="#ffffff"/>
         </svg>
       </div>
       <h1>What should we <em>uncover</em>?</h1>

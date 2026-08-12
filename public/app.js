@@ -28,29 +28,28 @@ const providerList = $('#providerList');
 const providerName = $('#providerName');
 const providerDot = $('#providerDot');
 
-/* ---------- Auralis logo (original emblem: a luminous aperture + radiating aural arcs) ---------- */
+/* ---------- Auralis logo (original emblem: a luminous "A" lens inside a rotating aurora ring) ---------- */
 function logoSVG(size = 28, gid = 'g'){
-  return `<svg viewBox="0 0 48 48" width="${size}" height="${size}" aria-hidden="true">
+  return `<svg class="al-svg" viewBox="0 0 100 100" width="${size}" height="${size}" aria-hidden="true">
     <defs>
-      <linearGradient id="auroraL${gid}" x1="0" y1="0" x2="1" y2="1">
+      <linearGradient id="alg${gid}" x1="0" y1="0" x2="1" y2="1">
         <stop offset="0" stop-color="#7cf6ff"/><stop offset="0.5" stop-color="#9b8cff"/><stop offset="1" stop-color="#ff8ad1"/>
       </linearGradient>
-      <linearGradient id="auroraR${gid}" x1="0" y1="1" x2="1" y2="0">
-        <stop offset="0" stop-color="#7cf6ff" stop-opacity="0.9"/><stop offset="1" stop-color="#ff8ad1" stop-opacity="0.9"/>
-      </linearGradient>
+      <radialGradient id="alr${gid}" cx="0.5" cy="0.5" r="0.5">
+        <stop offset="0" stop-color="#9b8cff" stop-opacity="0.35"/><stop offset="1" stop-color="#9b8cff" stop-opacity="0"/>
+      </radialGradient>
     </defs>
-    <g class="logo-arcs">
-      <path class="arc arc-1" d="M5 16 A18 18 0 0 1 5 32" fill="none" stroke="url(#auroraL${gid})" stroke-width="2.6" stroke-linecap="round" opacity="0.55"/>
-      <path class="arc arc-2" d="M2 12 A24 24 0 0 1 2 36" fill="none" stroke="url(#auroraL${gid})" stroke-width="2.2" stroke-linecap="round" opacity="0.32"/>
-      <path class="arc arc-3" d="M10 20 A12 12 0 0 1 10 28" fill="none" stroke="url(#auroraL${gid})" stroke-width="2.4" stroke-linecap="round" opacity="0.8"/>
+    <circle class="al-glow" cx="50" cy="50" r="44" fill="url(#alr${gid})"/>
+    <g class="al-ring">
+      <circle class="al-ring-track" cx="50" cy="50" r="42" fill="none" stroke="url(#alg${gid})" stroke-width="2" stroke-opacity="0.18"/>
+      <circle class="al-ring-arc" cx="50" cy="50" r="42" fill="none" stroke="url(#alg${gid})" stroke-width="3" stroke-linecap="round" stroke-dasharray="120 144" pathLength="264"/>
     </g>
-    <g class="logo-arcs-right" transform="translate(48 0) scale(-1 1)">
-      <path class="arc arc-1" d="M5 16 A18 18 0 0 1 5 32" fill="none" stroke="url(#auroraR${gid})" stroke-width="2.6" stroke-linecap="round" opacity="0.55"/>
-      <path class="arc arc-2" d="M2 12 A24 24 0 0 1 2 36" fill="none" stroke="url(#auroraR${gid})" stroke-width="2.2" stroke-linecap="round" opacity="0.32"/>
-      <path class="arc arc-3" d="M10 20 A12 12 0 0 1 10 28" fill="none" stroke="url(#auroraR${gid})" stroke-width="2.4" stroke-linecap="round" opacity="0.8"/>
+    <g class="al-A">
+      <path class="al-A-left" d="M50 22 L30 74" fill="none" stroke="url(#alg${gid})" stroke-width="6" stroke-linecap="round"/>
+      <path class="al-A-right" d="M50 22 L70 74" fill="none" stroke="url(#alg${gid})" stroke-width="6" stroke-linecap="round"/>
+      <path class="al-A-bar" d="M37 54 L63 54" fill="none" stroke="url(#alg${gid})" stroke-width="5" stroke-linecap="round"/>
     </g>
-    <path class="logo-core" d="M24 9 C30 18, 30 30, 24 39 C18 30, 18 18, 24 9 Z" fill="url(#auroraL${gid})"/>
-    <ellipse class="logo-spark" cx="24" cy="24" rx="3.2" ry="6" fill="#ffffff" opacity="0.85"/>
+    <circle class="al-spark" cx="50" cy="22" r="3.4" fill="#ffffff"/>
   </svg>`;
 }
 let logoSeq = 0;
@@ -388,6 +387,7 @@ function updateQueueBadge(){
     badge.hidden = n === 0;
     badge.textContent = `${n} queued`;
     badge.classList.toggle('show', n > 0);
+    badge.title = n > 0 ? `Click to clear ${n} queued prompt${n>1?'s':''}` : '';
   }
   const hint = document.querySelector('.composer-hint');
   if (hint){
@@ -401,10 +401,17 @@ function updateQueueBadge(){
   }
 }
 
+function clearQueue(){
+  promptQueue.length = 0;
+  updateQueueBadge();
+}
+
 async function drainQueue(){
   while (promptQueue.length > 0){
     const next = promptQueue.shift();
     updateQueueBadge();
+    // Reset the stop flag so a previously-aborted stream doesn't kill the queued one.
+    stopRequested = false;
     setSending(true);
     await runPipelineDeferred(next);
     setSending(false);
@@ -948,12 +955,23 @@ exportBtn.addEventListener('click',()=>{
 
 /* ---------- Slash command menu ---------- */
 const cmdMenu = document.getElementById('cmdMenu');
+
+// Official Gemini sparkle (4-point concave star) for the /gemini icon.
+const GEMINI_ICON = `<svg viewBox="0 0 100 100" width="18" height="18" aria-hidden="true">
+  <defs><linearGradient id="gmIco" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#4f8cff"/><stop offset="0.5" stop-color="#9b8cff"/><stop offset="1" stop-color="#ff8ad1"/></linearGradient></defs>
+  <path d="M50 4 C54 32 68 46 96 50 C68 54 54 68 50 96 C46 68 32 54 4 50 C32 46 46 32 50 4 Z" fill="url(#gmIco)"/>
+</svg>`;
+const CLEAR_ICON = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1.3 14a2 2 0 0 1-2 1.8H8.3a2 2 0 0 1-2-1.8L5 6"/></svg>`;
+const MODEL_ICON = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.6"/><rect x="14" y="3" width="7" height="7" rx="1.6"/><rect x="3" y="14" width="7" height="7" rx="1.6"/><rect x="14" y="14" width="7" height="7" rx="1.6"/></svg>`;
+const KEY_ICON = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="15" r="4"/><path d="M10.8 12.2 21 2M17 6l2.5 2.5"/></svg>`;
+const HELP_ICON = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 1 1 4 2c-.8.5-2 .9-2 2.5"/><circle cx="12" cy="17" r="0.5" fill="currentColor"/></svg>`;
+
 const COMMANDS = [
-  { name:'/gemini <key>',  mark:'G', desc:'Set & verify your Gemini API key (overrides the server key for your requests)' },
-  { name:'/clear',          mark:'C', desc:'Clear the current chat history' },
-  { name:'/model',          mark:'M', desc:'Show which Gemini model Auralis is using right now' },
-  { name:'/key',            mark:'K', desc:'Show your currently-saved Gemini key (masked)' },
-  { name:'/help',           mark:'?', desc:'List all available commands' },
+  { name:'/gemini <key>',  icon: GEMINI_ICON, hint:'apiKey',     desc:'Set & verify your Gemini API key (overrides the server key for your requests)' },
+  { name:'/clear',          icon: CLEAR_ICON,  hint:'',          desc:'Clear the current chat history' },
+  { name:'/model',          icon: MODEL_ICON,  hint:'',          desc:'Show which Gemini model Auralis is using right now' },
+  { name:'/key',            icon: KEY_ICON,    hint:'',          desc:'Show your currently-saved Gemini key (masked)' },
+  { name:'/help',           icon: HELP_ICON,   hint:'',          desc:'List all available commands' },
 ];
 let cmdActiveIdx = 0;
 
@@ -963,9 +981,10 @@ function renderCmdMenu(filter){
   const list = COMMANDS.filter(c => !f || c.name.toLowerCase().includes(f) || c.desc.toLowerCase().includes(f));
   if (list.length === 0){ cmdMenu.hidden = true; cmdMenu.innerHTML=''; return; }
   cmdMenu.hidden = false;
-  cmdMenu.innerHTML = list.map((c,i)=>`
+  cmdMenu.innerHTML = `<div class="cmd-menu-head">Commands</div>` +
+    list.map((c,i)=>`
     <div class="cmd-menu-item ${i===0?'active':''}" data-idx="${i}" data-cmd="${escapeHtml(c.name)}">
-      <span class="cmd-menu-ico">${c.mark}</span>
+      <span class="cmd-menu-ico">${c.icon}</span>
       <span class="cmd-menu-body"><span class="cmd-menu-name">${escapeHtml(c.name)}</span><span class="cmd-menu-desc">${escapeHtml(c.desc)}</span></span>
     </div>`).join('');
   cmdMenu.querySelectorAll('.cmd-menu-item').forEach(it=>{
@@ -1040,6 +1059,9 @@ function boot(){
   updateProviderStatus();
   webToggle.classList.toggle('active', state.settings.web);
   deepToggle.classList.toggle('active', state.settings.deep);
+  // Click the queue badge to clear the queue.
+  const qb = document.getElementById('queueBadge');
+  if (qb) qb.addEventListener('click', clearQueue);
   if (state.chats.length===0){
     state.chats.push({ id:uid(), title:'New research', createdAt:Date.now(), updatedAt:Date.now(), messages:[] });
   }
