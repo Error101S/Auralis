@@ -2,8 +2,8 @@
    AURALIS — research AI app logic
    - Sends prompts to the real backend (/api/search): DuckDuckGo
      search + Gemini synthesis, with source citations.
-   - Falls back to a local offline demo engine when the server
-     isn't reachable (e.g. opening index.html directly).
+   - The backend never fabricates answers: if no Gemini key is
+     configured, it returns a clear error that is shown in chat.
    ============================================================ */
 
 /* ---------- DOM ---------- */
@@ -435,10 +435,14 @@ async function apiSearch(query){
       signal: ctrl.signal,
     });
     clearTimeout(timer);
-    if (!res.ok) return null;
+    if (!res.ok){
+      let msg = 'Server error (' + res.status + ')';
+      try { const j = await res.json(); if (j && j.error) msg = j.error; } catch {}
+      return { error: msg };
+    }
     return await res.json();
   } catch {
-    return null;
+    return { error: "Couldn't reach the Auralis server. Try again in a moment." };
   }
 }
 /* normalize server sources into the UI shape */
@@ -496,146 +500,6 @@ function addReplies(chat, userText, aiText){
   toggleSendBtn();
 }
 
-/* ---------- Offline demo engine (fallback when no server) ---------- */
-const KNOWLEDGE = [
-  {
-    kws:['fusion','tokamak','reactor','plasma','nif','ignition','net energy'],
-    short:`Commercial fusion power almost certainly won't land **this decade**, but the pieces are coming together fast. ITER in France is the flagship experiment (first plasma now targeted in the late 2030s), while private ventures — Commonwealth Fusion Systems (SPARC, mid-2020s), Helion (2028 target), TAE and Zap — are pushing much shorter timelines on smaller, cheaper machines. The U.S. National Ignition Facility crossed the "ignition" milestone in December 2022 (more energy out than laser energy in), but that's a single-shot inertial experiment, not a power plant. Realistic consensus: first net-positive plants in the 2030s–2040s.`,
-    bullets:[
-      `**ITER** — the world's largest tokamak (France). Assembly is largely done but first plasma slipped to ~2035; it will not produce electricity.`,
-      `**SPARC (Commonwealth Fusion Systems)** — compact tokamak using high-temperature superconducting magnets; aims for net energy ~2027, then a pilot plant.`,
-      `**Helion** — claims a 2028 commercial reactor (direct energy conversion, no steam turbine); has signed a power purchase agreement with Microsoft.`,
-      `**NIF** — achieved >1x laser energy gain (Dec 2022, repeated 2023); a research milestone rather than a reactor.`,
-      `**Economics** — the open question isn't physics anymore, it's cost per MWh, Tritium fuel supply, and materials (neutron damage to the first wall).`,
-    ],
-    caveat:`Fusion timelines are famously optimistic. Take any vendor date as a "best case" — peer-reviewed journals and ITER experience suggest slippage is the norm.`,
-  },
-  {
-    kws:['keyboard','mechanical','switches','keycap','hall effect','typing'],
-    short:`For programming under $150 the shortlist is: **Keychron V6 / V1 Max** (gasket-mounted, QMK/VIA, hot-swap, ~$79–119), **Wooting 60HE** (~$140, analog Hall-effect — the gamer/typer hybrid), **Epomaker TH80 / TH96** (great value), and the **NuPhy Air75 V2** if you want low-profile. The trend is Hall-effect magnetic switches for 0.1ms latency and per-key tuning, and gasket-mount foam builds for sound.`,
-    bullets:[
-      `**Layout** — 75% or 65% with arrows is the sweet spot for coding; full-size takes desk space you don't need.`,
-      `**Switch choice** — linear (MX Red / Gateron) is the common programming pick; tactile (Brown) if you like feedback; Hall-effect if you want analog input.`,
-      `**Hot-swap + QMK/VIA** — buy hot-swap so you can swap switches and remap every key in software without flashing.`,
-      `**Sound & feel** — gasket mount + foam + lubed stabilizers do more for the feel than the switch brand.`,
-      `**Wireless** — 2.4GHz dongle mode is the latency-safe option; Bluetooth is fine for typing.`,
-    ],
-    caveat:`"Best" is subjective — switch feel is personal. Buy from a vendor with easy returns and try both a linear and a tactile first.`,
-  },
-  {
-    kws:['exoplanet','james webb','webb telescope','alien','biosignature','k2-18','trappist','habitable'],
-    short:`No — no confirmed life so far, but JWST has found the most promising atmosphere yet. In 2023-2025 JWST repeatedly observed **K2-18b** (a hycean world ~124 light-years away) and detected methane, CO₂, and possible **dimethyl sulfide (DMS)** — a molecule that on Earth is only produced by life. The signal is tantalizing but contested and needs confirmation. The TRAPPIST-1 system (7 rocky planets, 3 in the habitable zone) is next on the telescope's list. Real confirmation probably needs the next-generation Habitable Worlds Observatory, planned for the 2040s.`,
-    bullets:[
-      `**K2-18b** — JWST spectra show methane + CO₂ + candidate DMS. DMS is the molecule skeptics are split on: it can come from non-biological chemistry in some models.`,
-      `**TRAPPIST-1** — 7 Earth-sized planets; JWST has begun transmission-spectroscopy runs on the innermost rocky worlds.`,
-      `**Method** — astronomers look for "biosignatures" (O₂, CH₄, DMS, phosphine) in atmospheres during transits; each gas alone is ambiguous, combinations are stronger.`,
-      `**Timeline** — HWO (NASA) targets a 2040s launch; many scientists expect the first *credible* evidence of life, not proof, within this decade.`,
-    ],
-    caveat:`Almost every "life detected" headline since 2020 (phosphine on Venus, DMS on K2-18b) is a candidate signal that later analyses made less certain. Treat each as evidence, not proof.`,
-  },
-  {
-    kws:['salmon','dams','spawning','chinook','river','pacific','run'],
-    short:`West-coast salmon runs are collapsing for a stack of overlapping reasons, in rough order of blame: **dams** (blocking cold-water refuges and killing smolt passage), **warming rivers** (summer water too hot; "thermal barriers" kill returning adults), **ocean heatwaves and food-web shifts**, and historical overharvest. The good news: the **Klamath River's four dam removals (completed 2024, the largest dam-removal project in U.S. history)** already produced the first salmon spawning upstream of the former dam sites in 2024-2025 — evidence that removal works, fast.`,
-    bullets:[
-      `**Dams** — the single most fixable cause: they raise water temps, delay smolts, and block spawning grounds. Removal (Klamath, Elwha earlier) shows recovery in years, not decades.`,
-      `**Climate** — rivers are ~2-4°C warmer in summer; salmon stop migrating above ~18-20°C. Ocean heatwaves (2014-16, 2019-20) devastated forage and returning adults.`,
-      `**Hatcheries** — they buffer wild declines but erode genetic diversity; wild fish are the population that matters for recovery.`,
-      `**Forecasting** — the Pacific Salmon Treaty models now predict several Chinook stocks in continued decline; managers cut fisheries accordingly.`,
-    ],
-    caveat:`Runs vary wildly by watershed and species — a collapse in one river can hide recovery in another. Always ask "which river, which species" before drawing conclusions.`,
-  },
-];
-function matchTopic(query){
-  const q = query.toLowerCase();
-  let best = null, bestScore = 0;
-  KNOWLEDGE.forEach(entry=>{
-    let score = 0;
-    entry.kws.forEach(k=>{ if (q.includes(k.toLowerCase())) score += k.length; });
-    if (score > bestScore){ bestScore = score; best = entry; }
-  });
-  return bestScore >= 4 ? best : null;
-}
-function intentOf(query){
-  const q = query.toLowerCase();
-  if (/\bhow\b|\bsteps\b|\bway to\b|\btutorial\b/.test(q)) return 'howto';
-  if (/\b(vs|versus|or)\b|\bbetter\b|\bcompare\b/.test(q)) return 'compare';
-  if (/\bwhy\b|\bcause\b|\breason\b/.test(q)) return 'why';
-  if (/^(what|who|when|where) /i.test(q) || /\bwhat is\b|\bdefine\b|\bmeaning\b/.test(q)) return 'whatis';
-  if (/\bbest\b|\btop\b|\brecommend\b|\bbudget\b/.test(q)) return 'recommend';
-  if (/\bwill\b|\bfuture\b|\bnext\b|\bpredict\b|\b202[5-9]\b/.test(q)) return 'future';
-  return 'explain';
-}
-function makeSources(query, depth){
-  const h0 = query.split('').reduce((a,c,i)=>(a*31+c.charCodeAt(0))|0, 7);
-  const h = Math.abs(h0);
-  const sites = [
-    {site:'wikipedia', name:'Wikipedia', url:`https://en.wikipedia.org/wiki/Special:Search?search=${encodeURIComponent(query.slice(0,80))}`, d:'en.wikipedia.org'},
-    {site:'arxiv', name:'arXiv', url:`https://arxiv.org/search/?query=${encodeURIComponent(query.slice(0,80))}`, d:'arxiv.org'},
-    {site:'nature', name:'Nature', url:`https://www.nature.com/search?q=${encodeURIComponent(query.slice(0,80))}`, d:'nature.com'},
-    {site:'reuters', name:'Reuters', url:`https://www.reuters.com/site-search/?query=${encodeURIComponent(query.slice(0,80))}`, d:'reuters.com'},
-    {site:'guardian', name:'The Guardian', url:`https://www.theguardian.com/search?q=${encodeURIComponent(query.slice(0,80))}`, d:'theguardian.com'},
-    {site:'github', name:'GitHub', url:`https://github.com/search?q=${encodeURIComponent(query.slice(0,80))}&type=repositories`, d:'github.com'},
-    {site:'stackoverflow', name:'Stack Overflow', url:`https://stackoverflow.com/search?q=${encodeURIComponent(query.slice(0,80))}`, d:'stackoverflow.com'},
-    {site:'mit', name:'MIT News', url:`https://news.mit.edu/search?keys=${encodeURIComponent(query.slice(0,80))}`, d:'news.mit.edu'},
-    {site:'stanford', name:'Stanford', url:`https://www.google.com/search?q=${encodeURIComponent('site:stanford.edu '+query.slice(0,40))}`, d:'stanford.edu'},
-    {site:'reddit', name:'Reddit', url:`https://www.reddit.com/search/?q=${encodeURIComponent(query.slice(0,80))}`, d:'reddit.com'},
-    {site:'youtube', name:'YouTube', url:`https://www.youtube.com/results?search_query=${encodeURIComponent(query.slice(0,80))}`, d:'youtube.com'},
-    {site:'medium', name:'Medium', url:`https://medium.com/search?q=${encodeURIComponent(query.slice(0,80))}`, d:'medium.com'},
-  ];
-  const n = depth? 8 : 5;
-  const chosen = [];
-  const short = query.slice(0,42) + (query.length>42?'…':'');
-  const snippets = {
-    wikipedia:`Encyclopedia overview — the most-cited summary of "${short}".`,
-    arxiv:`Recent preprint on "${short}" — methods-first paper with data and figures.`,
-    nature:`Peer-reviewed coverage of "${short}" — original research or a commissioned explainer.`,
-    reuters:`News wire — fast, fact-checked reporting on "${short}".`,
-    guardian:`Long-form analysis of "${short}" in the UK press.`,
-    github:`Real code, issues and repos matching "${short}".`,
-    stackoverflow:`Engineer Q&A — highest-voted practical answers on "${short}".`,
-    mit:`Research news from MIT covering "${short}".`,
-    stanford:`Stanford course notes and research pages indexed for "${short}".`,
-    reddit:`Practitioner forum thread highlights about "${short}".`,
-    youtube:`Talks and tutorials explaining "${short}" on video.`,
-    medium:`Essay-length explainers on "${short}" from practitioners.`,
-  };
-  for (let i=0;i<n;i++){
-    const s = sites[(h+i*7) % sites.length];
-    if (chosen.some(c=>c.site===s.site)) continue;
-    chosen.push({ site:s.site, title:`${s.name}: ${short}`, url:s.url, displayUrl:s.d, favicon:s.d, snippet:snippets[s.site] });
-  }
-  return chosen;
-}
-function synthesize(query, depth, provider, sources){
-  const topic = query.replace(/[?.!]+$/,'').trim();
-  const subj = topic.length>60? topic.slice(0,57)+'…' : topic;
-  const intent = intentOf(query);
-  const kb = matchTopic(query);
-  let out = '';
-  out += `**Here's what I found.**\n\n`;
-  out += `I ran \`web_search()\` via **${provider}** and pulled **${sources.length} sources**${depth? ' — and read full page content from them (includeContent mode)':''}. I cross-checked the results and synthesized the picture below. You can open every source yourself under "Sources used" at the bottom of this answer.\n\n`;
-  if (kb){
-    out += `**Short answer.**\n\n${kb.short}\n\n`;
-    out += `**What the sources actually say.**\n\n${kb.bullets.map(b=>'- '+b).join('\n')}\n\n`;
-    out += `**Watch-out.**\n\n${kb.caveat}\n\n`;
-  } else {
-    const fallbacks = {
-      howto:`**Short answer.**\n\nFor "${subj}", the reliable approach breaks into five steps: (1) define the goal and constraints precisely, (2) compare 2-3 mainstream approaches against each other, (3) pick the most documented option and try it on a small sample first, (4) validate against primary sources — official docs, papers, or maintainers — not just forums, and (5) iterate based on measured results rather than opinion.\n\n`,
-      compare:`**Short answer.**\n\nThe sources don't declare a single winner — they converge on a framework: pick based on (1) your use case, (2) cost over 3-5 years, and (3) ecosystem maturity. Most comparisons agree the biggest differentiators are long-term maintenance and lock-in, not day-one features.\n\n`,
-      why:`**Short answer.**\n\nThe causes cluster into three buckets that the sources agree on: structural factors (long-standing design or policy), recent catalysts (last few years of data or decisions), and secondary amplifiers that make the first two worse. The most-cited sources put the most weight on the structural bucket — which also means changes will take time.\n\n`,
-      whatis:`**Short answer.**\n\n"${subj}" is best understood as a well-documented concept with broad agreement on its definition across the sources, some controversy around the edges, and a history that explains why it's framed differently in different communities. The technical sources are the most precise; the general-audience ones add context.\n\n`,
-      recommend:`**Short answer.**\n\nThe sources agree there's a shortlist, not a single best pick. The consistent pattern across reviews and rankings: the top recommendation wins on value/quality balance for most people, a "best performance" runner-up costs meaningfully more, and a "budget" option is better than its price suggests. Match your budget and priorities, then verify with hands-on reviews.\n\n`,
-      future:`**Short answer.**\n\nThe sources split between "sooner than most think" and "later than vendors claim". The honest consensus: the trend line is clearly in one direction, but the timeline depends on variables the sources can't yet measure (costs, regulation, adoption). Plan for the trend; don't bet the farm on the date.\n\n`,
-      explain:`**Short answer.**\n\nOn "${subj}", the sources converge on the core facts but differ on emphasis: the technical/primary sources give the most reliable details, while the news and community sources add context on why it matters. The key nuance most summaries miss is that the answer depends on your specific use case — define that first.\n\n`,
-    };
-    out += (fallbacks[intent]||fallbacks.explain) + `\n`;
-    out += `**What the sources actually say.**\n\n- The most-cited source ([${sources[0].displayUrl}](${sources[0].url})) directly addresses "${subj}" — start there for the canonical treatment.\n- [${sources[1].displayUrl}](${sources[1].url}) adds the latest developments and dates the claims, useful for recency.\n- [${sources[2].displayUrl}](${sources[2].url}) covers it from a practical/community angle — good for real-world caveats.\n- The remaining ${Math.max(0,sources.length-3)} sources cross-check the same facts; I didn't see contradictions on the core points.\n\n`;
-    out += `**Watch-out.**\n\nSource quality varies by domain — prefer primary/technical sources over summaries when a claim matters.\n\n`;
-  }
-  out += `**Want me to dig deeper?** I can fetch any of the sources below in full, answer follow-up questions, or research a sub-topic. Just ask.`;
-  return out;
-}
-
 /* ---------- The pipeline runner ---------- */
 async function runPipeline(userText, opts){
   if (!opts.replace) {
@@ -681,17 +545,16 @@ async function runPipeline(userText, opts){
     stage.querySelector('.stage-text').textContent = `searching the live web…`;
     stage.querySelector('.providers').innerHTML = `<span class="pv">duckduckgo</span> · 5 sources`;
 
-    // 1) Try the real backend
+    // 1) Ask the real backend (live web search + real Gemini synthesis)
     const api = await apiSearch(userText);
-    let sources, text;
+    let sources = [], text;
     if (api && api.text && api.sources){
       sources = normalizeSources(api.sources);
       text = api.text;
       m.provider = 'duckduckgo + gemini';
     } else {
-      sources = makeSources(userText, opts.deep);
-      text = synthesize(userText, opts.deep, 'offline-demo', sources);
-      m.provider = 'offline-demo';
+      text = (api && api.error) || "Auralis couldn't generate an answer. Try again in a moment.";
+      m.provider = '';
     }
     m.sources = sources;
     m.text = text;
@@ -725,13 +588,12 @@ async function runPipeline(userText, opts){
     const aiAvatar = el.querySelector('.avatar-ai');
     setLogoState(aiAvatar, 'thinking');
     const api = await apiSearch(userText);
-    let sources, text;
+    let sources = [], text;
     if (api && api.text && api.sources){
       sources = normalizeSources(api.sources);
       text = api.text;
     } else {
-      sources = makeSources(userText, opts.deep);
-      text = synthesize(userText, opts.deep, 'offline-demo', sources);
+      text = (api && api.error) || "Auralis couldn't generate an answer. Try again in a moment.";
     }
     m.sources = sources;
     m.text = text;
@@ -967,11 +829,11 @@ const KEY_ICON = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" st
 const HELP_ICON = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 1 1 4 2c-.8.5-2 .9-2 2.5"/><circle cx="12" cy="17" r="0.5" fill="currentColor"/></svg>`;
 
 const COMMANDS = [
-  { name:'/gemini <key>',  icon: GEMINI_ICON, hint:'apiKey',     desc:'Set & verify your Gemini API key (overrides the server key for your requests)' },
-  { name:'/clear',          icon: CLEAR_ICON,  hint:'',          desc:'Clear the current chat history' },
-  { name:'/model',          icon: MODEL_ICON,  hint:'',          desc:'Show which Gemini model Auralis is using right now' },
-  { name:'/key',            icon: KEY_ICON,    hint:'',          desc:'Show your currently-saved Gemini key (masked)' },
-  { name:'/help',           icon: HELP_ICON,   hint:'',          desc:'List all available commands' },
+  { name:'/gemini <key>',  icon: GEMINI_ICON, hint:'apiKey', accent:'#7cf6ff', desc:'Set & verify your Gemini API key (overrides the server key for your requests)' },
+  { name:'/clear',          icon: CLEAR_ICON,  hint:'',          accent:'#ff8a9b', desc:'Clear the current chat history' },
+  { name:'/model',          icon: MODEL_ICON,  hint:'',          accent:'#9b8cff', desc:'Show which Gemini model Auralis is using right now' },
+  { name:'/key',            icon: KEY_ICON,    hint:'',          accent:'#ffd166', desc:'Show your currently-saved Gemini key (masked)' },
+  { name:'/help',           icon: HELP_ICON,   hint:'',          accent:'#7cf6ff', desc:'List all available commands' },
 ];
 let cmdActiveIdx = 0;
 
@@ -982,11 +844,16 @@ function renderCmdMenu(filter){
   if (list.length === 0){ cmdMenu.hidden = true; cmdMenu.innerHTML=''; return; }
   cmdMenu.hidden = false;
   cmdMenu.innerHTML = `<div class="cmd-menu-head">Commands</div>` +
-    list.map((c,i)=>`
+    list.map((c,i)=>{
+      const argStart = c.name.indexOf(' ');
+      const cmdToken = argStart > 0 ? escapeHtml(c.name.slice(0, argStart)) : escapeHtml(c.name);
+      const argPill = argStart > 0 ? ` <span class="cmd-menu-arg">${escapeHtml(c.name.slice(argStart+1))}</span>` : '';
+      return `
     <div class="cmd-menu-item ${i===0?'active':''}" data-idx="${i}" data-cmd="${escapeHtml(c.name)}">
-      <span class="cmd-menu-ico">${c.icon}</span>
-      <span class="cmd-menu-body"><span class="cmd-menu-name">${escapeHtml(c.name)}</span><span class="cmd-menu-desc">${escapeHtml(c.desc)}</span></span>
-    </div>`).join('');
+      <span class="cmd-menu-ico" style="--acc:${c.accent}">${c.icon}</span>
+      <span class="cmd-menu-body"><span class="cmd-menu-name">${cmdToken}${argPill}</span><span class="cmd-menu-desc">${escapeHtml(c.desc)}</span></span>
+    </div>`;
+    }).join('');
   cmdMenu.querySelectorAll('.cmd-menu-item').forEach(it=>{
     it.addEventListener('mouseenter',()=>{
       cmdActiveIdx = Number(it.dataset.idx);

@@ -310,19 +310,23 @@ kbd{font-family:'JetBrains Mono';font-size:10.5px;padding:1px 5px;border-radius:
 @keyframes badgePulse{0%,100%{box-shadow:0 0 0 0 rgba(124,246,255,.4)}50%{box-shadow:0 0 0 4px rgba(124,246,255,0)}}
 
 /* Slash command menu (hand-crafted) */
-.cmd-menu{position:absolute;bottom:calc(100% + 10px);left:0;right:0;max-width:430px;margin:0 auto;background:rgba(15,15,32,.82);backdrop-filter:blur(24px);border:1px solid rgba(124,246,255,.18);border-radius:16px;box-shadow:0 18px 50px -14px rgba(0,0,0,.78),0 0 0 1px rgba(255,255,255,.03) inset;padding:8px;z-index:30;max-height:320px;overflow-y:auto;animation:cmdMenuIn .18s var(--ease) both}
+.cmd-menu{position:absolute;bottom:calc(100% + 10px);left:0;right:0;max-width:470px;margin:0 auto;background:rgba(20,20,42,.94);backdrop-filter:blur(24px);border:1px solid rgba(124,246,255,.35);border-radius:16px;box-shadow:0 18px 50px -14px rgba(0,0,0,.8),0 0 0 1px rgba(255,255,255,.04) inset;padding:8px;z-index:30;max-height:340px;overflow-y:auto;animation:cmdMenuIn .18s var(--ease) both}
 @keyframes cmdMenuIn{from{opacity:0;transform:translateY(6px) scale(.985)}to{opacity:1;transform:none}}
 .cmd-menu::-webkit-scrollbar{width:7px}
-.cmd-menu::-webkit-scrollbar-thumb{background:rgba(255,255,255,.1);border-radius:6px}
-.cmd-menu-head{font-family:'Space Grotesk';font-size:10.5px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--text-faint);padding:6px 10px 8px 11px;border-bottom:1px solid var(--border);margin-bottom:4px}
-.cmd-menu-item{display:flex;align-items:center;gap:12px;padding:9px 11px;border-radius:11px;cursor:pointer;transition:background .15s var(--ease),transform .15s var(--ease);border:1px solid transparent}
-.cmd-menu-item:hover,.cmd-menu-item.active{background:rgba(124,246,255,.09);border-color:rgba(124,246,255,.22)}
+.cmd-menu::-webkit-scrollbar-thumb{background:rgba(255,255,255,.14);border-radius:6px}
+.cmd-menu-head{font-family:'Space Grotesk';font-size:11px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--cyan);padding:6px 10px 8px 11px;border-bottom:1px solid rgba(124,246,255,.22);margin-bottom:4px}
+.cmd-menu-item{display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:11px;cursor:pointer;transition:background .15s var(--ease),transform .15s var(--ease),border-color .15s var(--ease);border:1px solid transparent}
+.cmd-menu-item:hover{background:rgba(124,246,255,.1);border-color:rgba(124,246,255,.26)}
+.cmd-menu-item.active{background:rgba(124,246,255,.16);border-color:rgba(124,246,255,.5)}
 .cmd-menu-item.active{transform:translateX(2px)}
-.cmd-menu-ico{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;flex-shrink:0;background:rgba(255,255,255,.05);border:1px solid var(--border);color:var(--text)}
-.cmd-menu-ico svg{display:block}
+.cmd-menu-item.active::before{content:"";position:absolute;left:-8px;top:50%;transform:translateY(-50%);width:3px;height:20px;border-radius:3px;background:linear-gradient(180deg,var(--cyan),var(--violet))}
+.cmd-menu-item{position:relative}
+.cmd-menu-ico{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;flex-shrink:0;background:color-mix(in srgb,var(--acc,#7cf6ff) 16%, rgba(255,255,255,.04));border:1px solid color-mix(in srgb,var(--acc,#7cf6ff) 45%, transparent);color:var(--acc,#7cf6ff)}
+.cmd-menu-ico svg{display:block;filter:drop-shadow(0 1px 3px rgba(0,0,0,.4))}
 .cmd-menu-body{flex:1;min-width:0}
-.cmd-menu-name{font-family:'JetBrains Mono';font-size:12.5px;color:var(--text);font-weight:600;letter-spacing:-.01em}
-.cmd-menu-desc{font-size:11.5px;color:var(--text-dim);margin-top:2px;line-height:1.35}
+.cmd-menu-name{font-family:'JetBrains Mono';font-size:13px;color:#fff;font-weight:700;letter-spacing:-.01em;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.12);padding:3px 9px;border-radius:8px;display:inline-block;vertical-align:middle}
+.cmd-menu-arg{font-family:'JetBrains Mono';font-size:11px;font-weight:500;color:var(--text-dim);background:rgba(0,0,0,.28);border:1px solid rgba(255,255,255,.14);padding:3px 8px;border-radius:8px;margin-left:6px}
+.cmd-menu-desc{font-size:11.5px;color:#c3c6e4;margin-top:6px;line-height:1.4}
 /* ---------- Responsive ---------- */
 @media (max-width:880px){
   /* Mobile: sidebar is a fixed drawer; collapsed/expanded handled by .open */
