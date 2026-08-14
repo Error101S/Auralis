@@ -1,0 +1,27 @@
+{
+  "name": "auralis",
+  "version": "1.0.0",
+  "description": "Auralis — web research AI assistant",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@mozilla/readability": "^0.6.0",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "duck-duck-scrape": "^2.2.7",
+    "express": "^5.2.1",
+    "express-session": "^1.19.0",
+    "linkedom": "^0.16.11",
+    "p-limit": "^6.2.0",
+    "passport": "^0.7.0",
+    "passport-google-oauth20": "^2.0.0",
+    "sqlite3": "^6.0.1",
+    "turndown": "^7.2.4"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
