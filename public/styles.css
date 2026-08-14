@@ -154,42 +154,40 @@ input,textarea{font-family:inherit;border:none;background:none;color:inherit;out
 @keyframes fadeUp{from{opacity:0;transform:translateY(14px)}to{opacity:1}}
 .empty.hidden{display:none}
 
-/* ---------- Auralis logo (luminous "A" lens inside a rotating aurora ring) ---------- */
+/* ---------- Auralis logo ("Aurora Aperture": interlocking hexagonal iris + spark) ---------- */
 .auralis-logo{display:grid;place-items:center;filter:drop-shadow(0 0 10px rgba(124,246,255,.45))}
 .al-svg{display:block;overflow:visible}
-.auralis-logo .al-ring,.auralis-logo .al-A,.auralis-logo .al-spark,.auralis-logo .al-glow{transform-box:fill-box;transform-origin:center}
+.auralis-logo .al-glow,.auralis-logo .al-ring,.auralis-logo .al-core,.auralis-logo .al-spark{transform-box:fill-box;transform-origin:center}
 
-/* idle: slow ring rotation, gentle breathing A, slow sparkle */
-.auralis-logo .al-ring{animation:alRingSpin 14s linear infinite}
-.auralis-logo .al-A{animation:alBreathe 4s var(--ease) infinite}
+/* idle: ring slowly orbits, core breathes, spark twinkles */
+.auralis-logo .al-ring{animation:alRingSpin 22s linear infinite}
+.auralis-logo .al-core{animation:alBreathe 4s var(--ease) infinite}
 .auralis-logo .al-spark{animation:alSparkle 3.4s var(--ease) infinite}
 @keyframes alRingSpin{from{transform:rotate(0)}to{transform:rotate(360deg)}}
-@keyframes alBreathe{0%,100%{transform:scale(1)}50%{transform:scale(1.05)}}
-@keyframes alSparkle{0%,100%{transform:scale(1);opacity:.9}50%{transform:scale(1.5);opacity:.55}}
+@keyframes alBreathe{0%,100%{transform:scale(1)}50%{transform:scale(1.035)}}
+@keyframes alSparkle{0%,100%{transform:scale(1);opacity:.88}50%{transform:scale(1.12);opacity:1}}
 
 /* hero sizing */
 .logo-hero{width:120px;height:120px;margin-bottom:30px}
-.logo-hero .al-svg{filter:drop-shadow(0 0 26px rgba(155,140,255,.5))}
+.logo-hero .al-svg{filter:drop-shadow(0 0 28px rgba(155,140,255,.5))}
 
-/* thinking: faster ring spin, the A pulses, the bar sweeps vertically (scanning) */
-.auralis-logo[data-state="thinking"] .al-ring{animation:alRingSpin 2.6s linear infinite}
-.auralis-logo[data-state="thinking"] .al-A{animation:alThinkA 1.4s var(--ease) infinite}
-.auralis-logo[data-state="thinking"] .al-A-bar{animation:alBarScan 1.4s var(--ease) infinite}
-.auralis-logo[data-state="thinking"] .al-spark{animation:alSparkle 1.1s var(--ease) infinite}
-.auralis-logo[data-state="thinking"] .al-glow{animation:alGlowPulse 1.4s var(--ease) infinite}
-@keyframes alThinkA{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.08);opacity:.82}}
-@keyframes alBarScan{0%{transform:translateY(0);opacity:1}50%{transform:translateY(-3px);opacity:.5}100%{transform:translateY(0);opacity:1}}
+/* thinking: ring spins fast, core pulses energetically, spark flickers rapidly */
+.auralis-logo[data-state="thinking"] .al-ring{animation:alRingSpin 2.5s linear infinite;filter:drop-shadow(0 0 5px rgba(124,246,255,.6))}
+.auralis-logo[data-state="thinking"] .al-core{animation:alThinkPulse 1.3s var(--ease) infinite}
+.auralis-logo[data-state="thinking"] .al-spark{animation:alThinkSpark .75s var(--ease) infinite}
+.auralis-logo[data-state="thinking"] .al-glow{animation:alGlowPulse 1.3s var(--ease) infinite}
+@keyframes alThinkPulse{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.07);opacity:.82}}
+@keyframes alThinkSpark{0%,100%{transform:scale(.85);opacity:.5}50%{transform:scale(1.2);opacity:1}}
 @keyframes alGlowPulse{0%,100%{opacity:.6;transform:scale(1)}50%{opacity:1;transform:scale(1.08)}}
 
-/* talking: ring pulses, A bar does a level-meter bounce, spark pulses with speech */
-.auralis-logo[data-state="talking"] .al-ring{animation:alRingPulse .55s var(--ease) infinite}
-.auralis-logo[data-state="talking"] .al-A-bar{animation:alBarTalk .28s var(--ease) infinite alternate}
-.auralis-logo[data-state="talking"] .al-A{animation:alBreathe .55s var(--ease) infinite}
-.auralis-logo[data-state="talking"] .al-spark{animation:alSparkTalk .28s var(--ease) infinite alternate}
+/* talking: core thumps like speech, spark expands/contracts, ring breathes with volume */
+.auralis-logo[data-state="talking"] .al-core{animation:alTalkThump .5s var(--ease) infinite}
+.auralis-logo[data-state="talking"] .al-spark{animation:alTalkSpark .25s var(--ease) infinite alternate}
+.auralis-logo[data-state="talking"] .al-ring{animation:alTalkRing .7s var(--ease) infinite}
 .auralis-logo[data-state="talking"] .al-glow{animation:alGlowPulse .55s var(--ease) infinite}
-@keyframes alRingPulse{0%,100%{transform:scale(1)}50%{transform:scale(1.06)}}
-@keyframes alBarTalk{from{transform:scaleX(.7);opacity:.85}to{transform:scaleX(1);opacity:1}}
-@keyframes alSparkTalk{from{transform:scale(.85);opacity:.8}to{transform:scale(1.4);opacity:1}}
+@keyframes alTalkThump{0%,100%{transform:scale(1)}50%{transform:scale(.93)}}
+@keyframes alTalkSpark{from{transform:scale(.85);opacity:.75}to{transform:scale(1.3);opacity:1}}
+@keyframes alTalkRing{0%,100%{transform:scale(1);opacity:.5}50%{transform:scale(1.05);opacity:.85}}
 
 .empty h1{font-family:'Space Grotesk';font-size:42px;font-weight:700;letter-spacing:-.03em;line-height:1.05;margin-bottom:12px}
 .empty h1 em{font-style:normal;background:linear-gradient(90deg,var(--cyan),var(--violet),var(--pink));-webkit-background-clip:text;background-clip:text;color:transparent;background-size:200% 100%;animation:shimmerText 4s linear infinite}
@@ -310,23 +308,21 @@ kbd{font-family:'JetBrains Mono';font-size:10.5px;padding:1px 5px;border-radius:
 @keyframes badgePulse{0%,100%{box-shadow:0 0 0 0 rgba(124,246,255,.4)}50%{box-shadow:0 0 0 4px rgba(124,246,255,0)}}
 
 /* Slash command menu (hand-crafted) */
-.cmd-menu{position:absolute;bottom:calc(100% + 10px);left:0;right:0;max-width:470px;margin:0 auto;background:rgba(20,20,42,.94);backdrop-filter:blur(24px);border:1px solid rgba(124,246,255,.35);border-radius:16px;box-shadow:0 18px 50px -14px rgba(0,0,0,.8),0 0 0 1px rgba(255,255,255,.04) inset;padding:8px;z-index:30;max-height:340px;overflow-y:auto;animation:cmdMenuIn .18s var(--ease) both}
-@keyframes cmdMenuIn{from{opacity:0;transform:translateY(6px) scale(.985)}to{opacity:1;transform:none}}
-.cmd-menu::-webkit-scrollbar{width:7px}
-.cmd-menu::-webkit-scrollbar-thumb{background:rgba(255,255,255,.14);border-radius:6px}
-.cmd-menu-head{font-family:'Space Grotesk';font-size:11px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--cyan);padding:6px 10px 8px 11px;border-bottom:1px solid rgba(124,246,255,.22);margin-bottom:4px}
-.cmd-menu-item{display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:11px;cursor:pointer;transition:background .15s var(--ease),transform .15s var(--ease),border-color .15s var(--ease);border:1px solid transparent}
-.cmd-menu-item:hover{background:rgba(124,246,255,.1);border-color:rgba(124,246,255,.26)}
-.cmd-menu-item.active{background:rgba(124,246,255,.16);border-color:rgba(124,246,255,.5)}
-.cmd-menu-item.active{transform:translateX(2px)}
-.cmd-menu-item.active::before{content:"";position:absolute;left:-8px;top:50%;transform:translateY(-50%);width:3px;height:20px;border-radius:3px;background:linear-gradient(180deg,var(--cyan),var(--violet))}
-.cmd-menu-item{position:relative}
-.cmd-menu-ico{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;flex-shrink:0;background:color-mix(in srgb,var(--acc,#7cf6ff) 16%, rgba(255,255,255,.04));border:1px solid color-mix(in srgb,var(--acc,#7cf6ff) 45%, transparent);color:var(--acc,#7cf6ff)}
-.cmd-menu-ico svg{display:block;filter:drop-shadow(0 1px 3px rgba(0,0,0,.4))}
+.cmd-menu{position:absolute;bottom:calc(100% + 10px);left:0;right:0;max-width:430px;margin:0 auto;background:rgba(15,15,32,.82);backdrop-filter:blur(24px);border:1px solid rgba(124,246,255,.18);border-radius:16px;box-shadow:0 18px 50px -14px rgba(0,0,0,.78),0 0 0 1px rgba(255,255,255,.03) inset;padding:8px;z-index:30;max-height:320px;overflow-y:auto;animation:cmdMenuIn .18s var(--ease) both}
+@keyframes cmdMenuIn{from{opacity:0;transform:translateY(8px) scale(.98)}to{opacity:1;transform:none}}
+.cmd-menu::-webkit-scrollbar{width:6px}
+.cmd-menu::-webkit-scrollbar-thumb{background:rgba(255,255,255,.06);border-radius:6px}
+.cmd-menu-head{font-family:'Space Grotesk';font-size:10px;font-weight:600;letter-spacing:.18em;text-transform:uppercase;color:var(--text-faint);padding:5px 10px 7px 11px;border-bottom:1px solid rgba(255,255,255,.06);margin-bottom:3px;display:flex;align-items:center;gap:8px}
+.cmd-menu-head::before{content:'';width:10px;height:10px;border-radius:3px;background:linear-gradient(135deg,var(--cyan),var(--violet));flex-shrink:0}
+.cmd-menu-item{display:flex;align-items:center;gap:11px;padding:8px 10px;border-radius:10px;cursor:pointer;transition:background .14s var(--ease),transform .14s var(--ease);border:1px solid transparent}
+.cmd-menu-item:hover,.cmd-menu-item.active{background:linear-gradient(90deg,rgba(124,246,255,.09),rgba(155,140,255,.06));border-color:rgba(124,246,255,.2)}
+.cmd-menu-item.active{transform:translateX(3px);box-shadow:inset 2px 0 0 var(--cyan)}
+.cmd-menu-ico{width:34px;height:34px;border-radius:9px;display:grid;place-items:center;flex-shrink:0;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);color:var(--text);transition:.16s var(--ease)}
+.cmd-menu-item:hover .cmd-menu-ico,.cmd-menu-item.active .cmd-menu-ico{background:rgba(124,246,255,.12);border-color:rgba(124,246,255,.28);color:var(--cyan)}
+.cmd-menu-ico svg{display:block}
 .cmd-menu-body{flex:1;min-width:0}
-.cmd-menu-name{font-family:'JetBrains Mono';font-size:13px;color:#fff;font-weight:700;letter-spacing:-.01em;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.12);padding:3px 9px;border-radius:8px;display:inline-block;vertical-align:middle}
-.cmd-menu-arg{font-family:'JetBrains Mono';font-size:11px;font-weight:500;color:var(--text-dim);background:rgba(0,0,0,.28);border:1px solid rgba(255,255,255,.14);padding:3px 8px;border-radius:8px;margin-left:6px}
-.cmd-menu-desc{font-size:11.5px;color:#c3c6e4;margin-top:6px;line-height:1.4}
+.cmd-menu-name{font-family:'JetBrains Mono';font-size:12.5px;color:var(--text);font-weight:600;letter-spacing:-.01em}
+.cmd-menu-desc{font-size:11px;color:var(--text-dim);margin-top:1px;line-height:1.35}
 /* ---------- Responsive ---------- */
 @media (max-width:880px){
   /* Mobile: sidebar is a fixed drawer; collapsed/expanded handled by .open */
