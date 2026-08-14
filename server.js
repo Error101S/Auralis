@@ -8,6 +8,7 @@ import session from 'express-session';
 import passport from 'passport';
 import { Strategy as GoogleStrategy } from 'passport-google-oauth20';
 import { findOrCreateUser, getUserById, updateUserApiKey } from './database.js';
+import { detectIntent, casualReply, solveCalculation, creativeReply, expandQuery, systemReply } from './intent.js';
 import { Readability } from '@mozilla/readability';
 import { parseHTML } from 'linkedom';
 import TurndownService from 'turndown';
@@ -345,9 +346,19 @@ const mockSources = (query) => {
     ];
 };
 
-// True when a query is a direct, answerable system/meta question that should
-// not be sent to live web search at all (current date, who are you, etc.).
-const SYSTEM_QUERY_RE = /\b(what(\s+i[s']?s|'s)\s+today|what\s+day|current\s+(date|time)|wh?[o0]?\s+are?\s+you|your\s+name|what\s+can\s+you\s+do|who\s+built\s+you|are?\s+you\s+(ai|a\s+bot|human))\b/i;
+// Conversation memory: earlier turns of this chat, supplied by the client.
+// Used ONLY to understand follow-ups ("what about X?", "expand on the second
+// point") — never as research material.
+function conversationSection(history){
+    if (!Array.isArray(history) || history.length === 0) return '';
+    const turns = history
+        .filter(m => m && (m.role === 'user' || m.role === 'assistant' || m.role === 'model') && typeof m.text === 'string' && m.text.trim())
+        .slice(-8)
+        .map(m => '[' + (m.role === 'user' ? 'user' : 'assistant') + '] "' + m.text.trim().slice(0, 3000) + '"')
+        .join('\n');
+    if (!turns) return '';
+    return 'CONVERSATION CONTEXT (earlier turns in this chat, oldest first — for understanding follow-ups and references like "it", "that", or "earlier" ONLY; not research material):\n' + turns + '\n\n';
+}
 
 // Simple intent + topic detection for the built-in (no-Gemini-key) synthesizer.
 const INTENTS = [
@@ -362,24 +373,25 @@ function intentOf(q){ for (const it of INTENTS) if (it.re.test(q)) return it.key
 
 // Lightweight built-in synthesis used when no Gemini key is configured and the
 // server has no key either. It builds a clean answer from the live search
-// sources (if any) WITHOUT narrating tool internals.
+// sources (if any) WITHOUT narrating tool internals or forcing research
+// headings onto the reply.
 function localSynthesize(query, sources){
     const subj = query.replace(/[?.!]+$/, '').trim();
     const intent = intentOf(query);
     if (sources.length === 0){
-        return `I don't have live web results for *${subj}* right now, so I can't give you a grounded answer. Ask anything that benefits from fresh web data and I'll search and summarize it for you.`;
+        return `I couldn't find live web results for *${subj}* right now, so I don't have enough to give you a grounded answer. Try rephrasing, or ask about something the web can verify.`;
     }
     const fallbacks = {
-        howto: `The reliable approach breaks into a few steps: define the goal and constraints precisely, compare 2–3 mainstream approaches, try the best-documented one on a small sample first, validate against primary sources, and iterate based on measured results.`,
-        compare: `There's rarely a single winner — pick based on your use case, total cost over 3–5 years, and ecosystem maturity. The biggest differentiators are long-term maintenance and lock-in, not day-one features.`,
-        why: `The causes cluster into structural factors, recent catalysts, and secondary amplifiers. The structural bucket gets the most weight, which means changes will take time.`,
-        whatis: `"${subj}" is well-documented with broad agreement on its definition, some debate around the edges, and a history that explains why different communities frame it differently.`,
-        recommend: `There's a shortlist, not a single best pick: a value/quality leader, a higher-cost performance runner-up, and a budget option that outperforms its price. Match your budget and priorities, then confirm with hands-on reviews.`,
-        future: `The trend is clearly in one direction, but the timeline depends on variables sources can't yet measure (costs, regulation, adoption). Plan for the trend; don't bet the farm on the date.`,
-        explain: `The sources converge on the core facts but differ on emphasis — the technical/primary sources give the most reliable details, while news and community coverage adds context on why it matters.`,
+        howto: `To do "${subj}" reliably: (1) define the goal and constraints precisely, (2) compare 2–3 mainstream approaches, (3) try the best-documented one on a small sample first, (4) validate against primary sources — official docs, papers, or maintainers — and (5) iterate based on measured results rather than opinion.`,
+        compare: `On "${subj}" there's rarely a single winner — the deciding factors are your use case, total cost over 3–5 years, and ecosystem maturity. Long-term maintenance and lock-in matter more than day-one features.`,
+        why: `The causes of "${subj}" cluster into structural factors, recent catalysts, and amplifiers. The structural factors carry the most weight, which means change happens slowly rather than overnight.`,
+        whatis: `"${subj}" — a well-documented topic: broad agreement on the core definition, some debate around the edges, and a history that explains why different communities frame it differently.`,
+        recommend: `For "${subj}" there's a shortlist, not a single best pick: a value/quality leader, a higher-cost performance runner-up, and a budget option that beats its price. Match your budget and priorities, then confirm with hands-on reviews.`,
+        future: `The trend behind "${subj}" points clearly in one direction, but the timeline depends on variables the sources can't yet measure — costs, regulation, adoption. Plan for the trend; don't bet the farm on the date.`,
+        explain: `On "${subj}" the core facts are broadly agreed on; the differences are emphasis. The most reliable details come from technical and primary sources, while news and community coverage adds why-it-matters context.`,
     };
     let out = `${fallbacks[intent] || fallbacks.explain}\n\n`;
-    out += `**Where the facts sit now:** the live results point in the direction above — the picture could still shift as better evidence comes in, and the source list below is what this answer is based on.\n\n`;
+    out += `**Key points from the live sources:**\n\n`;
     sources.slice(0, 4).forEach((s, i) => {
         const lead = s.snip ? s.snip.slice(0, 160) : '';
         out += `- [${i + 1}] **${s.title}** — ${lead}${lead && lead.length < s.snip.length ? '…' : ''}\n`;
@@ -436,30 +448,100 @@ app.post('/api/gemini-key', async (req, res) => {
 
 app.post('/api/search', async (req, res) => {
     const { query, apiKey: apiKeyFromBody, history } = req.body;
-    if (!query) {
+    if (!query || typeof query !== 'string' || !query.trim()) {
         return res.status(400).json({ error: 'Query is required' });
     }
+    const trimmed = query.trim();
 
     try {
-        let synthesizedText = "I couldn't generate a response.";
-        let modelUsed = '';
-        let searchResults = [];
+        // Resolve the API key up front (client > logged-in user > server env)
+        // so intent dispatch can choose the direct-Gemini vs. search path.
+        let apiKey = apiKeyFromBody;
+        if (!apiKey && req.isAuthenticated() && req.user.gemini_api_key) {
+            apiKey = req.user.gemini_api_key;
+        }
+        if (!apiKey && process.env.GEMINI_API_KEY) {
+            apiKey = process.env.GEMINI_API_KEY;
+        }
+        if (typeof apiKey === 'string') apiKey = apiKey.trim();
+
+        const today = new Date().toISOString().slice(0, 10);
+        const convSection = conversationSection(history);
 
         // 0. Direct system / meta questions (current date, who are you, etc.)
         // Answer directly — never web-search these, never attach sources.
-        if (SYSTEM_QUERY_RE.test(query)) {
-            const today = new Date();
-            const dateStr = today.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
-            return res.json({
-                sources: [],
-                text: `Today is ${dateStr}. I'm Auralis, your web research assistant — I search the live web and synthesize grounded answers for you. What would you like to uncover?`,
-                model: 'auralis-local',
-            });
+        const sysText = systemReply(trimmed);
+        if (sysText) {
+            return res.json({ sources: [], text: sysText, model: 'auralis-local' });
         }
 
-        // 1. Perform web search using duck-duck-scrape, with a robust HTML fallback.
+        // 1. Intent detection — decide whether this message needs the web at all.
+        const intent = detectIntent(trimmed, history);
+
+        // 1a. Casual chatter (hello, thanks, cool…): conversational reply,
+        // no search, no sources, no research framing.
+        if (intent === 'casual') {
+            return res.json({ sources: [], text: casualReply(trimmed), model: 'auralis-local' });
+        }
+
+        // 1b. Calculations: solved locally, never searched.
+        if (intent === 'calculation') {
+            const solved = solveCalculation(trimmed);
+            if (solved) {
+                return res.json({ sources: [], text: solved, model: 'auralis-local' });
+            }
+            // Solver said no (odd phrasing) — fall through to research.
+        }
+
+        // 1c. Creative requests: never search. Gemini writes it when a key is
+        // present; otherwise a built-in response (honest about its limits).
+        if (intent === 'creative') {
+            if (apiKey) {
+                const promptText = `You are Auralis, a creative writing assistant. The user wants something created, not researched.\n\nToday is ${today}.\n\n${convSection}User's request: "${trimmed}"\n\nWrite exactly what they asked for, in the format, length, and tone they requested. Just deliver the creative work — no citations, no sources, no research framing, no explanations of what you did, no follow-up questions.`;
+                try {
+                    const result = await geminiGenerate(apiKey, promptText);
+                    return res.json({
+                        sources: [],
+                        text: result.ok ? (result.text || '') : `⚠️ Gemini API Error: ${result.error || 'unknown error'}`,
+                        model: result.ok ? (result.model || '') : '',
+                    });
+                } catch (err) {
+                    console.error("Gemini fetch error:", err);
+                    return res.json({ sources: [], text: `⚠️ Gemini API Error: ${err.message}`, model: '' });
+                }
+            }
+            return res.json({ sources: [], text: creativeReply(trimmed), model: 'auralis-local' });
+        }
+
+        // 1d. Simple knowledge questions WITH Gemini: answer directly from the
+        // model's own knowledge — no search, no sources. (Without a key these
+        // fall through to the search pipeline, since local synthesis needs
+        // source material.)
+        if (intent === 'knowledge' && apiKey) {
+            const promptText = `You are Auralis, a knowledgeable research assistant. Answer the user's question directly from your own knowledge — no web search, no sources, no citations.\n\nToday is ${today}.\n\n${convSection}User's question: "${trimmed}"\n\nAnswer accurately and concisely, matching length to the question. If the question concerns very recent events, prices, or fast-changing data that you can't know reliably, say so plainly and offer to search the live web instead. If you don't know, say you don't know — never guess. No citations, no source list, no research framing.`;
+            try {
+                const result = await geminiGenerate(apiKey, promptText);
+                return res.json({
+                    sources: [],
+                    text: result.ok ? (result.text || '') : `⚠️ Gemini API Error: ${result.error || 'unknown error'}`,
+                    model: result.ok ? (result.model || '') : '',
+                });
+            } catch (err) {
+                console.error("Gemini fetch error:", err);
+                return res.json({ sources: [], text: `⚠️ Gemini API Error: ${err.message}`, model: '' });
+            }
+        }
+
+        // 2. Research path: current events, research requests, knowledge
+        // without a key, and follow-ups. Perform web search using
+        // duck-duck-scrape, with a robust HTML fallback. Short follow-ups get
+        // their earlier context glued on so the search finds the right pages.
+        const searchQuery = expandQuery(trimmed, history);
+        let synthesizedText = "I couldn't generate a response.";
+        let modelUsed = '';
+        let searchResults = [];
         try {
-            const results = await search(query, { safeSearch: SafeSearchType.MODERATE });
+            const results = await search(searchQuery, { safeSearch: SafeSearchType.MODERATE });
             searchResults = results.results.slice(0, 5).map(r => ({
                 title: r.title,
                 url: r.url,
@@ -470,7 +552,7 @@ app.post('/api/search', async (req, res) => {
         }
         if (searchResults.length === 0) {
             console.log('Falling back to DDG HTML endpoint...');
-            const fb = await ddgHtmlSearch(query);
+            const fb = await ddgHtmlSearch(searchQuery);
             if (fb.length > 0) searchResults = fb.slice(0, 5);
             console.log(`DDG HTML returned ${searchResults.length} results`);
         }
@@ -479,42 +561,18 @@ app.post('/api/search', async (req, res) => {
         // enrichSources() already skips placeholder URLs, so real results get
         // fetched live; if nothing came back, we leave sources empty.
 
-        // 1b. Fetch live page content so Gemini answers from CURRENT data.
+        // 2b. Fetch live page content so Gemini answers from CURRENT data.
         if (searchResults.length > 0) {
             searchResults = await enrichSources(searchResults);
-        }
-
-        // 2. Resolve the API key (client > logged-in user > server env)
-        let apiKey = apiKeyFromBody;
-        if (!apiKey && req.isAuthenticated() && req.user.gemini_api_key) {
-            apiKey = req.user.gemini_api_key;
-        }
-        if (!apiKey && process.env.GEMINI_API_KEY) {
-            apiKey = process.env.GEMINI_API_KEY;
         }
 
         if (!apiKey) {
             // No Gemini key anywhere — fall back to Auralis's built-in synthesizer
             // (summarizes the live search results without leaking tool internals,
             // and is honest when there are no results at all).
-            synthesizedText = localSynthesize(query, searchResults);
+            synthesizedText = localSynthesize(trimmed, searchResults);
             modelUsed = 'auralis-local';
         } else {
-            const today = new Date().toISOString().slice(0, 10);
-            // Conversation memory: earlier turns of this chat, supplied by the
-            // client. Used ONLY to understand follow-ups ("what about X?",
-            // "expand on the second point") — never as research material.
-            let conversationSection = '';
-            if (Array.isArray(history) && history.length > 0) {
-                const turns = history
-                    .filter(m => m && (m.role === 'user' || m.role === 'assistant' || m.role === 'model') && typeof m.text === 'string' && m.text.trim())
-                    .slice(-8)
-                    .map(m => '[' + (m.role === 'user' ? 'user' : 'assistant') + '] "' + m.text.trim().slice(0, 3000) + '"')
-                    .join('\n');
-                if (turns) {
-                    conversationSection = 'CONVERSATION CONTEXT (your earlier turns in this chat, oldest first — for understanding follow-ups and references like "it", "that", or "earlier" ONLY; NOT research material, never cite it):\n' + turns + '\n\nUse it to understand the current question, but base every fact and citation on the CURRENT reference material below. Do not repeat earlier answers unless the user asks for a recap.';
-                }
-            }
             // Only include REAL sources in the prompt. Never inject placeholders.
             // Each entry visibly marks whether it carries full page content
             // (strong grounding) or only a search snippet (weak grounding), so
@@ -532,10 +590,12 @@ app.post('/api/search', async (req, res) => {
 
 Today is ${today}.
 
-User's question: "${query}"
+User's question: "${trimmed}"
 
-${conversationSection ? conversationSection + '\n\n' : ''}REFERENCE MATERIAL (numbered sources [1] through [${searchResults.length || 0}]; title + URL + evidence, for your use only — never describe this section or its inner workings):
+${convSection}REFERENCE MATERIAL (numbered sources [1] through [${searchResults.length || 0}]; title + URL + evidence, for your use only — never describe this section or its inner workings):
 ${sourcesText}
+
+Use the conversation context above (if any) only to understand what the user is asking now — never cite it, and don't repeat earlier answers unless the user asks for a recap.
 
 ANSWER QUALITY RULES — follow every rule that applies:
 

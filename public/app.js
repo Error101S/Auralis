@@ -338,6 +338,7 @@ function buildSourceEl(s, idx){
 }
 
 function renderSourcesInto(bubble, sources){
+  if (!sources || sources.length === 0) return;
   const toggle = document.createElement('button');
   toggle.className='sources-toggle';
   toggle.type='button';
@@ -529,6 +530,64 @@ function addReplies(chat, userText, aiText){
 }
 
 /* ---------- Offline demo engine (fallback when no server) ---------- */
+/* Offline messages still get classified, so "hi" isn't answered with a
+   research dump even without the backend. Mirrors intent.js in miniature. */
+const OFF_CASUAL = new Set([
+  'hi','hello','hey','yo','sup','howdy','hiya','hey there','hello there','hi there',
+  'good morning','good afternoon','good evening','morning','evening',
+  'thanks','thank you','thx','ty','thanks a lot','thank you very much','appreciate it',
+  'no problem','no worries','np','anytime','youre welcome','sure thing',
+  'ok','okay','k','got it','gotcha','alright','sure','yeah','yes','no','fine','right','cool','nice',
+  'awesome','great','perfect','sweet','wow','nice one','good to know','lol','lmao','haha','hahaha','hehe',
+  'bye','goodbye','good night','goodnight','see you','see ya','see you later','cya','later','peace','take care','gtg',
+  'how are you','how r u','hru','hows it going','how is it going','whats up','what is up','wassup',
+  'whats new','how have you been','what are you up to','wyd','howd your day','hows your day',
+  'ok thanks','okay thanks','thanks anyway','sounds good','fair enough','you too','have a good day','have a nice day',
+  'yes please','go ahead','continue','keep going','more','tell me more','what else','again','anyway',
+]);
+function offNorm(q){
+  return q.toLowerCase().replace(/'/g,'').replace(/\s+/g,' ').trim().replace(/[?!.,:;]+$/,'');
+}
+function offlineDetect(q){
+  const n = offNorm(q);
+  if (OFF_CASUAL.has(n) || /^(hi|hey|hello|yo|sup|howdy|hiya)( there| everyone| guys| friend)?$/.test(n)) return 'casual';
+  if (/\b(joke|poem|haiku|sonnet|lyrics|story about|tell me a|write me|make me|write a|create a|translate|rewrite|paraphrase|brainstorm)\b/.test(n)) return 'creative';
+  if (/([\d.]+)\s*(?:percent|%)\s*of\s*([\d.]+)/i.test(n)) return 'calc';
+  if (/(-?[\d.]+)\s*([+x×*\-/^])\s*(-?[\d.]+)/i.test(n)) return 'calc';
+  return 'research';
+}
+function offlineReply(q, intent){
+  const n = offNorm(q);
+  if (intent === 'casual'){
+    if (/^(bye|goodbye|good night|goodnight|see you|cya|later|peace|take care|gtg)/.test(n)) return "Goodbye! Come back whenever you need the web researched.";
+    if (/^(thanks|thank|thx|ty|appreciate)/.test(n) || /^(no problem|no worries|anytime|yw|youre welcome)/.test(n)) return "You're welcome! Happy to help — ask me anything else.";
+    if (/^(hi|hey|hello|yo|howdy|hiya)|^(good )?(morning|afternoon|evening|day)/.test(n)) return "Hey there! I'm Auralis, your web research assistant. Give me a question and I'll dig into the web for a grounded answer.";
+    if (/^(how (are|is|s|r)|hru|whats up|what is up|wassup|sup|whats new|how have you been|hows your day|wyd)/.test(n)) return "Doing great — ready to dig. What should I research for you?";
+    return "Happy to help! What would you like me to research?";
+  }
+  if (intent === 'calc'){
+    const pct = n.match(/([\d.]+)\s*(?:percent|%)\s*of\s*([\d.]+)/i);
+    if (pct) return `${pct[1]}% of ${pct[2]} = ${Math.round(parseFloat(pct[1])/100*parseFloat(pct[2])*1e4)/1e4}`;
+    const m = n.match(/(-?[\d.]+)\s*([+x×*\-/^])\s*(-?[\d.]+)/);
+    if (m){
+      const a = parseFloat(m[1]), b = parseFloat(m[3]);
+      let r;
+      switch (m[2].replace('x','*').replace('×','*')){
+        case '+': r = a+b; break;
+        case '-': r = a-b; break;
+        case '*': r = a*b; break;
+        case '/': r = a/b; break;
+        case '^': r = Math.pow(a,b); break;
+      }
+      return `${m[1]} ${m[2]} ${m[3]} = ${Math.round(r*1e4)/1e4}`;
+    }
+    return "I can handle simple math offline (like \"25*37\") — conversions and calendar math need the live server.";
+  }
+  if (/\bjoke/.test(n)) return "Here's one: why did the database break up with the spreadsheet? Too many unresolved relationships.";
+  if (/\b(poem|haiku|sonnet)/.test(n)) return "A small one:\n\nAnswers hide in pages,\nlit by a patient, bright search —\nknowledge comes to light.";
+  if (/\b(story about|write me|make me|tell me a)/.test(n)) return "Original fiction runs on my Gemini engine — add your free API key with /gemini <key> and I'll write it properly.";
+  return "That kind of creation runs on my Gemini engine — add your free API key with /gemini <key> and I'll make it happen.";
+}
 const KNOWLEDGE = [
   {
     kws:['fusion','tokamak','reactor','plasma','nif','ignition','net energy'],
@@ -645,22 +704,25 @@ function synthesize(query, depth, provider, sources){
   const kb = matchTopic(query);
   let out = '';
   if (kb){
-    out += `**Short answer.**\n\n${kb.short}\n\n`;
-    out += `**What the sources actually say.**\n\n${kb.bullets.map(b=>'- '+b).join('\n')}\n\n`;
-    out += `**Watch-out.**\n\n${kb.caveat}\n\n`;
+    out += `${kb.short}\n\n`;
+    out += `**Key points:**\n\n${kb.bullets.map(b=>'- '+b).join('\n')}\n\n`;
+    out += `**Keep in mind:** ${kb.caveat}\n\n`;
   } else {
     const fallbacks = {
-      howto:`**Short answer.**\n\nFor "${subj}", the reliable approach breaks into five steps: (1) define the goal and constraints precisely, (2) compare 2-3 mainstream approaches against each other, (3) pick the most documented option and try it on a small sample first, (4) validate against primary sources — official docs, papers, or maintainers — not just forums, and (5) iterate based on measured results rather than opinion.\n\n`,
-      compare:`**Short answer.**\n\nThe sources don't declare a single winner — they converge on a framework: pick based on (1) your use case, (2) cost over 3-5 years, and (3) ecosystem maturity. Most comparisons agree the biggest differentiators are long-term maintenance and lock-in, not day-one features.\n\n`,
-      why:`**Short answer.**\n\nThe causes cluster into three buckets that the sources agree on: structural factors (long-standing design or policy), recent catalysts (last few years of data or decisions), and secondary amplifiers that make the first two worse. The most-cited sources put the most weight on the structural bucket — which also means changes will take time.\n\n`,
-      whatis:`**Short answer.**\n\n"${subj}" is best understood as a well-documented concept with broad agreement on its definition across the sources, some controversy around the edges, and a history that explains why it's framed differently in different communities. The technical sources are the most precise; the general-audience ones add context.\n\n`,
-      recommend:`**Short answer.**\n\nThe sources agree there's a shortlist, not a single best pick. The consistent pattern across reviews and rankings: the top recommendation wins on value/quality balance for most people, a "best performance" runner-up costs meaningfully more, and a "budget" option is better than its price suggests. Match your budget and priorities, then verify with hands-on reviews.\n\n`,
-      future:`**Short answer.**\n\nThe sources split between "sooner than most think" and "later than vendors claim". The honest consensus: the trend line is clearly in one direction, but the timeline depends on variables the sources can't yet measure (costs, regulation, adoption). Plan for the trend; don't bet the farm on the date.\n\n`,
-      explain:`**Short answer.**\n\nOn "${subj}", the sources converge on the core facts but differ on emphasis: the technical/primary sources give the most reliable details, while the news and community sources add context on why it matters. The key nuance most summaries miss is that the answer depends on your specific use case — define that first.\n\n`,
+      howto:`For "${subj}", the reliable approach breaks into five steps: (1) define the goal and constraints precisely, (2) compare 2-3 mainstream approaches against each other, (3) pick the most documented option and try it on a small sample first, (4) validate against primary sources — official docs, papers, or maintainers — not just forums, and (5) iterate based on measured results rather than opinion.\n\n`,
+      compare:`On "${subj}", there's no single winner — the sources converge on a framework: pick based on (1) your use case, (2) cost over 3-5 years, and (3) ecosystem maturity. The biggest differentiators are long-term maintenance and lock-in, not day-one features.\n\n`,
+      why:`On "${subj}", the causes cluster into three buckets: structural factors (long-standing design or policy), recent catalysts (last few years of data or decisions), and secondary amplifiers that make the first two worse. The most-cited sources put the most weight on the structural bucket — which also means changes will take time.\n\n`,
+      whatis:`"${subj}" is a well-documented concept with broad agreement on its definition across the sources, some controversy around the edges, and a history that explains why it's framed differently in different communities. The technical sources are the most precise; the general-audience ones add context.\n\n`,
+      recommend:`For "${subj}", the sources agree there's a shortlist, not a single best pick: a value/quality leader, a higher-cost performance runner-up, and a budget option that outperforms its price. Match your budget and priorities, then verify with hands-on reviews.\n\n`,
+      future:`On "${subj}", the sources split between "sooner than most think" and "later than vendors claim". The honest consensus: the trend line is clearly in one direction, but the timeline depends on variables the sources can't yet measure (costs, regulation, adoption). Plan for the trend; don't bet the farm on the date.\n\n`,
+      explain:`On "${subj}", the sources converge on the core facts but differ on emphasis: the technical/primary sources give the most reliable details, while the news and community sources add context on why it matters. The key nuance most summaries miss is that the answer depends on your specific use case — define that first.\n\n`,
     };
     out += (fallbacks[intent]||fallbacks.explain) + `\n`;
-    out += `**What the sources actually say.**\n\n- The most-cited source ([${sources[0].displayUrl}](${sources[0].url})) directly addresses "${subj}" — start there for the canonical treatment.\n- [${sources[1].displayUrl}](${sources[1].url}) adds the latest developments and dates the claims, useful for recency.\n- [${sources[2].displayUrl}](${sources[2].url}) covers it from a practical/community angle — good for real-world caveats.\n- The remaining ${Math.max(0,sources.length-3)} sources cross-check the same facts; I didn't see contradictions on the core points.\n\n`;
-    out += `**Watch-out.**\n\nSource quality varies by domain — prefer primary/technical sources over summaries when a claim matters.\n\n`;
+    out += `**Key points from the sources:**\n\n`;
+    sources.slice(0,3).forEach((s,i)=>{
+      out += `- [${s.displayUrl}](${s.url}) — ${s.snippet || `covers "${subj}" directly.`}\n`;
+    });
+    out += `\n`;
   }
   out += `Everything above is drawn from the sources listed below — open them to verify details or go deeper on any point.`;
   return out;
@@ -719,8 +781,16 @@ async function runPipeline(userText, opts){
       text = api.text;
       m.provider = 'duckduckgo + gemini';
     } else {
-      sources = makeSources(userText, opts.deep);
-      text = synthesize(userText, opts.deep, 'offline-demo', sources);
+      // No server: classify the message locally so casual/calc/creative
+      // messages never get a fake research dump.
+      const oi = offlineDetect(userText);
+      if (oi === 'research'){
+        sources = makeSources(userText, opts.deep);
+        text = synthesize(userText, opts.deep, 'offline-demo', sources);
+      } else {
+        sources = [];
+        text = offlineReply(userText, oi);
+      }
       m.provider = 'offline-demo';
     }
     m.sources = sources;
@@ -760,8 +830,14 @@ async function runPipeline(userText, opts){
       sources = normalizeSources(api.sources);
       text = api.text;
     } else {
-      sources = makeSources(userText, opts.deep);
-      text = synthesize(userText, opts.deep, 'offline-demo', sources);
+      const oi = offlineDetect(userText);
+      if (oi === 'research'){
+        sources = makeSources(userText, opts.deep);
+        text = synthesize(userText, opts.deep, 'offline-demo', sources);
+      } else {
+        sources = [];
+        text = offlineReply(userText, oi);
+      }
     }
     m.sources = sources;
     m.text = text;
