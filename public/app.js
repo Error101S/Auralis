@@ -250,19 +250,43 @@ function renderMarkdown(text){
   let t = escapeHtml(text);
   t = t.replace(/```([\s\S]*?)```/g, (_,c)=>`<pre style="background:rgba(0,0,0,.35);padding:10px;border-radius:8px;overflow:auto;margin:8px 0;font-family:'JetBrains Mono';font-size:12px"><code>${c.replace(/^\n/,'')}</code></pre>`);
   t = t.replace(/`([^`\n]+)`/g,'<code>$1</code>');
-  t = t.replace(/^### (.+)$/gm,'<h3>$1</h3>');
+  // Pipe tables: a run of consecutive lines starting and ending with "|".
+  t = t.replace(/(?:^|\n)((?:\|[^\n]*\|)(?:\n\|[^\n]*\|)+)/g,(block)=>{
+    const lines = block.trim().split(/\n/);
+    const cells = (line)=>line.replace(/^\s*\|/,'').replace(/\|\s*$/,'').split('|').map(c=>c.trim());
+    const sep = lines.length > 1 && /^[\s:\-|]+$/.test(lines[1]);
+    const rows = sep ? { head: cells(lines[0]), body: lines.slice(2).map(cells) }
+                     : { head: null, body: lines.map(cells) };
+    let h = '<table>';
+    if (rows.head) h += `<thead><tr>${rows.head.map(c=>`<th>${c||'&nbsp;'}</th>`).join('')}</tr></thead>`;
+    h += '<tbody>';
+    for (const row of rows.body) h += `<tr>${row.map(c=>`<td>${c||'&nbsp;'}</td>`).join('')}</tr>`;
+    h += '</tbody></table>';
+    return `\n\n${h}\n\n`;
+  });
+  // Blockquote: consecutive "> " lines (matched post-escape as "&gt;").
+  t = t.replace(/(?:^|\n)((?:&gt;\s?[^\n]*)(?:\n&gt;\s?[^\n]*)*)/g,(block)=>{
+    const q = block.replace(/^&gt;\s?/gm,'').trim();
+    return `\n\n<blockquote>${q}</blockquote>\n\n`;
+  });
+  // Horizontal rule: a standalone line of ---- *** ___.
+  t = t.replace(/(?:^|\n)([-*_]{3,})\s*(?=\n|$)/g,'\n\n<hr>\n\n');
+  t = t.replace(/^#### (.+)$/gm,(_,h)=>`\n\n<h4>${h}</h4>\n\n`);
+  t = t.replace(/^### (.+)$/gm,(_,h)=>`\n\n<h3>${h}</h3>\n\n`);
+  t = t.replace(/^## (.+)$/gm,(_,h)=>`\n\n<h2>${h}</h2>\n\n`);
   t = t.replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>');
   t = t.replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g,'<a href="$2" target="_blank" rel="noreferrer">$1</a>');
   t = t.replace(/(?:^|\n)((?:[-*] .+(?:\n|$))+)/g,(block)=>{
     const items = block.trim().split(/\n/).map(l=>l.replace(/^[-*] /,'')).map(i=>`<li>${i}</li>`).join('');
-    return `\n<ul>${items}</ul>`;
+    return `\n\n<ul>${items}</ul>\n\n`;
   });
   t = t.replace(/(?:^|\n)((?:\d+\. .+(?:\n|$))+)/g,(block)=>{
     const items = block.trim().split(/\n/).map(l=>l.replace(/^\d+\. /,'')).map(i=>`<li>${i}</li>`).join('');
-    return `\n<ol>${items}</ol>`;
+    return `\n\n<ol>${items}</ol>\n\n`;
   });
-  t = t.split(/\n{2,}/).map(p=>{
-    if (/^\s*<(ul|ol|h3|pre)/.test(p)) return p;
+  t = t.replace(/^\s*\n+/,'').replace(/\n+\s*$/,'');
+  t = t.split(/\n{2,}/).filter(Boolean).map(p=>{
+    if (/^\s*<(h[1-6]|ul|ol|pre|table|blockquote|hr)/.test(p)) return p;
     return `<p>${p.replace(/\n/g,'<br>')}</p>`;
   }).join('');
   return t;
@@ -605,8 +629,6 @@ function synthesize(query, depth, provider, sources){
   const intent = intentOf(query);
   const kb = matchTopic(query);
   let out = '';
-  out += `**Here's what I found.**\n\n`;
-  out += `I ran \`web_search()\` via **${provider}** and pulled **${sources.length} sources**${depth? ' — and read full page content from them (includeContent mode)':''}. I cross-checked the results and synthesized the picture below. You can open every source yourself under "Sources used" at the bottom of this answer.\n\n`;
   if (kb){
     out += `**Short answer.**\n\n${kb.short}\n\n`;
     out += `**What the sources actually say.**\n\n${kb.bullets.map(b=>'- '+b).join('\n')}\n\n`;
@@ -625,7 +647,7 @@ function synthesize(query, depth, provider, sources){
     out += `**What the sources actually say.**\n\n- The most-cited source ([${sources[0].displayUrl}](${sources[0].url})) directly addresses "${subj}" — start there for the canonical treatment.\n- [${sources[1].displayUrl}](${sources[1].url}) adds the latest developments and dates the claims, useful for recency.\n- [${sources[2].displayUrl}](${sources[2].url}) covers it from a practical/community angle — good for real-world caveats.\n- The remaining ${Math.max(0,sources.length-3)} sources cross-check the same facts; I didn't see contradictions on the core points.\n\n`;
     out += `**Watch-out.**\n\nSource quality varies by domain — prefer primary/technical sources over summaries when a claim matters.\n\n`;
   }
-  out += `**Want me to dig deeper?** I can fetch any of the sources below in full, answer follow-up questions, or research a sub-topic. Just ask.`;
+  out += `Everything above is drawn from the sources listed below — open them to verify details or go deeper on any point.`;
   return out;
 }
 

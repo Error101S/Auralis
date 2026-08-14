@@ -4,3 +4,4 @@ bun.lock
 .env
 database.sqlite
 *.sqlite
+pi-web-access-0.22.0/
