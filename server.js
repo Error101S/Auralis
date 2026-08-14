@@ -435,7 +435,7 @@ app.post('/api/gemini-key', async (req, res) => {
 });
 
 app.post('/api/search', async (req, res) => {
-    const { query, apiKey: apiKeyFromBody } = req.body;
+    const { query, apiKey: apiKeyFromBody, history } = req.body;
     if (!query) {
         return res.status(400).json({ error: 'Query is required' });
     }
@@ -501,6 +501,20 @@ app.post('/api/search', async (req, res) => {
             modelUsed = 'auralis-local';
         } else {
             const today = new Date().toISOString().slice(0, 10);
+            // Conversation memory: earlier turns of this chat, supplied by the
+            // client. Used ONLY to understand follow-ups ("what about X?",
+            // "expand on the second point") — never as research material.
+            let conversationSection = '';
+            if (Array.isArray(history) && history.length > 0) {
+                const turns = history
+                    .filter(m => m && (m.role === 'user' || m.role === 'assistant' || m.role === 'model') && typeof m.text === 'string' && m.text.trim())
+                    .slice(-8)
+                    .map(m => '[' + (m.role === 'user' ? 'user' : 'assistant') + '] "' + m.text.trim().slice(0, 3000) + '"')
+                    .join('\n');
+                if (turns) {
+                    conversationSection = 'CONVERSATION CONTEXT (your earlier turns in this chat, oldest first — for understanding follow-ups and references like "it", "that", or "earlier" ONLY; NOT research material, never cite it):\n' + turns + '\n\nUse it to understand the current question, but base every fact and citation on the CURRENT reference material below. Do not repeat earlier answers unless the user asks for a recap.';
+                }
+            }
             // Only include REAL sources in the prompt. Never inject placeholders.
             // Each entry visibly marks whether it carries full page content
             // (strong grounding) or only a search snippet (weak grounding), so
@@ -520,7 +534,7 @@ Today is ${today}.
 
 User's question: "${query}"
 
-REFERENCE MATERIAL (numbered sources [1] through [${searchResults.length || 0}]; title + URL + evidence, for your use only — never describe this section or its inner workings):
+${conversationSection ? conversationSection + '\n\n' : ''}REFERENCE MATERIAL (numbered sources [1] through [${searchResults.length || 0}]; title + URL + evidence, for your use only — never describe this section or its inner workings):
 ${sourcesText}
 
 ANSWER QUALITY RULES — follow every rule that applies:

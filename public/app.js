@@ -441,6 +441,21 @@ const sleep = (ms)=>new Promise(r=>setTimeout(r,ms));
 
 /* ---------- Real backend search (/api/search) ---------- */
 function hostOf(u){ try { return new URL(u).hostname.replace(/^www\./,''); } catch { return u; } }
+/* Conversation memory: the last few finished turns of the current chat, sent
+   with each request so the AI understands follow-ups ("and what about X?").
+   The in-flight user question (last 'user' entry) is excluded — it is sent
+   separately as the query. */
+function chatHistory(){
+  const chat = currentChat();
+  if (!chat) return [];
+  const out = [];
+  for (const m of chat.messages){
+    if (m.role === 'user') out.push({ role:'user', text:m.text });
+    else if (m.role === 'ai' && m.text && m.text.trim()) out.push({ role:'assistant', text:m.text });
+  }
+  if (out.length && out[out.length-1].role === 'user') out.pop();
+  return out.slice(-8);
+}
 async function apiSearch(query){
   try {
     const ctrl = new AbortController();
@@ -448,7 +463,7 @@ async function apiSearch(query){
     const res = await fetch('/api/search', {
       method:'POST',
       headers:{ 'Content-Type':'application/json' },
-      body: JSON.stringify({ query, apiKey: savedGeminiKey() || undefined }),
+      body: JSON.stringify({ query, apiKey: savedGeminiKey() || undefined, history: chatHistory() }),
       signal: ctrl.signal,
     });
     clearTimeout(timer);
