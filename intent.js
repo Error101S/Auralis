@@ -387,7 +387,7 @@ export function memoryCommand(query) {
         const kw = forget[1].trim();
         if (kw.length >= 2 && kw.length <= 60) return { cmd: 'forget', keyword: kw };
     }
-    const RECALL_RE = /what do you remember|what do you know about me|what do you remember about me|do you remember (me|anything|us)|what did i (tell|say) you|did i tell you|whats my name|what is my name|do you know (me|my name|who i am)|what have i told you|do you keep notes|what do you remember about us/i;
+    const RECALL_RE = /what do you remember|what do you know about me|what do you remember about me|do you remember (me|anything|us)|what did i (tell|say) you|did i tell you|whats my name|what is my name|do you know (me|my name|who i am)|what have i told you|do you keep notes|what do you remember about us|what (did|have|were) we (talk(ed|ing)?|chat(?:ted|ting)?|discuss(ed|ing)?|say|said) (about|earlier|before|previously)|whats? did we (talk|chat|discuss) about|(previous|last|earlier|past) (chat|conversation|session|messages)|remind me (what|about|of)|recap.*(conversation|chat|talking|talked|discussed)|summarize (our|this|the|my) (conversation|chat)/i;
     if (RECALL_RE.test(q)) return { cmd: 'recall' };
     return null;
 }
