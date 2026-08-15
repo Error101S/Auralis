@@ -507,8 +507,16 @@ app.post('/api/search', async (req, res) => {
                 return res.json({ sources: [], text: n > 0 ? `Forgot ${n} ${n === 1 ? 'memory' : 'memories'} matching that.` : `I don't have any memories matching that.`, model: 'auralis-local' });
             }
             const mems = await getMemories(memoryOwner);
-            const recent = await getRecentChat(memoryOwner, 10);
-            const recentTopics = recent.filter(r => r.role === 'user').map(r => '- ' + r.text);
+            // Prefer the per-browser log the client sent (it survives deploys);
+            // fall back to the server chat log.
+            const localTopics = Array.isArray(req.body.localChatLog)
+                ? req.body.localChatLog
+                      .filter(t => typeof t === 'string' && t.trim() && t.trim() !== trimmed)
+                      .map(t => '- ' + t.trim().slice(0, 160))
+                : [];
+            const recentTopics = localTopics.length
+                ? localTopics
+                : (await getRecentChat(memoryOwner, 10)).filter(r => r.role === 'user').map(r => '- ' + r.text);
             let text = '';
             if (mems.length) {
                 text += 'Here\'s what I remember:\n\n' + mems.map(m => '- ' + m).join('\n') + '\n\n';

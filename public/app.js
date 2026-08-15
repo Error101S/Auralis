@@ -468,14 +468,35 @@ function memoryId(){
   }
   return id;
 }
+/* Per-browser chat log: survives server redeploys, so "what did we talk
+   about in our previous chat?" still works even when the server DB was
+   wiped. Sent with every request; recall lists these if present. */
+const CHATLOG_KEY = 'auralis.chatlog';
+function localChatLog(){
+  try{
+    const arr = JSON.parse(localStorage.getItem(CHATLOG_KEY) || '[]');
+    return Array.isArray(arr) ? arr.filter(t => typeof t === 'string' && t.trim()).slice(-12) : [];
+  }catch{ return []; }
+}
+function rememberLocalChat(q){
+  try{
+    const arr = localChatLog();
+    const clean = String(q || '').replace(/\s+/g,' ').trim().slice(0,200);
+    if (!clean) return;
+    if (arr[arr.length-1] === clean) return;
+    arr.push(clean);
+    localStorage.setItem(CHATLOG_KEY, JSON.stringify(arr.slice(-20)));
+  }catch{}
+}
 async function apiSearch(query){
+  rememberLocalChat(query);
   try {
     const ctrl = new AbortController();
     const timer = setTimeout(()=>ctrl.abort(), 12000);
     const res = await fetch('/api/search', {
       method:'POST',
       headers:{ 'Content-Type':'application/json' },
-      body: JSON.stringify({ query, apiKey: savedGeminiKey() || undefined, history: chatHistory(), memoryId: memoryId() }),
+      body: JSON.stringify({ query, apiKey: savedGeminiKey() || undefined, history: chatHistory(), memoryId: memoryId(), localChatLog: localChatLog() }),
       signal: ctrl.signal,
     });
     clearTimeout(timer);
@@ -896,6 +917,7 @@ async function send(text){
     chat.title = 'New research';
     chatTitle.textContent = chat.title;
     chat.updatedAt = Date.now();
+    localStorage.removeItem(CHATLOG_KEY);
     saveChats();
     renderBoth();
     addReplies(chat, text, `Chat cleared. What would you like to research?`);
