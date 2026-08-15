@@ -1,6 +1,7 @@
 import sqlite3 from 'sqlite3';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { EventEmitter } from 'events';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -36,7 +37,47 @@ db.serialize(() => {
             UNIQUE(owner, fact)
         )
     `);
+    db.run(`
+        CREATE TABLE IF NOT EXISTS sessions (
+            sid TEXT PRIMARY KEY,
+            sess TEXT NOT NULL,
+            expire INTEGER NOT NULL
+        )
+    `);
 });
+
+// SQLite-backed session store for express-session (replaces the in-memory
+// MemoryStore, which leaks memory in production).
+export class SqliteSessionStore extends EventEmitter {
+    get(sid, cb) {
+        db.get('SELECT sess FROM sessions WHERE sid = ? AND expire > ?', [sid, Date.now()], (err, row) => {
+            if (err) return cb(err);
+            if (!row) return cb(null, null);
+            try {
+                cb(null, JSON.parse(row.sess));
+            } catch (parseErr) {
+                cb(null, null);
+            }
+        });
+    }
+
+    set(sid, sess, cb) {
+        const expires = sess.cookie && sess.cookie.expires ? new Date(sess.cookie.expires).getTime() : Date.now() + 30 * 24 * 60 * 60 * 1000;
+        db.run(
+            'INSERT INTO sessions (sid, sess, expire) VALUES (?, ?, ?) ON CONFLICT(sid) DO UPDATE SET sess = excluded.sess, expire = excluded.expire',
+            [sid, JSON.stringify(sess), expires],
+            (err) => cb(err)
+        );
+    }
+
+    destroy(sid, cb) {
+        db.run('DELETE FROM sessions WHERE sid = ?', [sid], (err) => cb(err, err ? undefined : true));
+    }
+
+    touch(sid, sess, cb) {
+        this.set(sid, sess, cb);
+    }
+}
 
 // Helper function to find or create a user by Google ID
 export const findOrCreateUser = (profile) => {

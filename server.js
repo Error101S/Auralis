@@ -7,7 +7,7 @@ import { fileURLToPath } from 'url';
 import session from 'express-session';
 import passport from 'passport';
 import { Strategy as GoogleStrategy } from 'passport-google-oauth20';
-import { findOrCreateUser, getUserById, updateUserApiKey, getMemories, addMemory, deleteMemories } from './database.js';
+import { findOrCreateUser, getUserById, updateUserApiKey, getMemories, addMemory, deleteMemories, SqliteSessionStore } from './database.js';
 import { detectIntent, casualReply, solveCalculation, creativeReply, expandQuery, systemReply, memoryCommand, extractFacts } from './intent.js';
 import { Readability } from '@mozilla/readability';
 import { parseHTML } from 'linkedom';
@@ -135,7 +135,8 @@ app.use(session({
     secret: process.env.SESSION_SECRET || 'auralis-super-secret-key-123',
     resave: false,
     saveUninitialized: false,
-    cookie: { secure: false, maxAge: 30 * 24 * 60 * 60 * 1000 } // 30 days
+    cookie: { secure: false, maxAge: 30 * 24 * 60 * 60 * 1000 }, // 30 days
+    store: new SqliteSessionStore()
 }));
 
 // Initialize Passport
