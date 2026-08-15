@@ -371,6 +371,66 @@ export function expandQuery(query, history) {
     return q;
 }
 
+/* ---------- Persistent memory ---------- */
+
+// Explicit memory commands ("remember that X", "forget X", "what do you
+// remember") are handled before intent dispatch: they never search the web.
+export function memoryCommand(query) {
+    const q = String(query || '').trim();
+    const store = q.match(/^remember\s+(?:that\s+)?(.+)$/i);
+    if (store) {
+        const f = store[1].replace(/[.!]+$/, '').trim();
+        if (f.length >= 3 && f.length <= 200) return { cmd: 'store', fact: f };
+    }
+    const forget = q.match(/^forget\s+(.+)$/i);
+    if (forget) {
+        const kw = forget[1].trim();
+        if (kw.length >= 2 && kw.length <= 60) return { cmd: 'forget', keyword: kw };
+    }
+    const RECALL_RE = /what do you remember|what do you know about me|what do you remember about me|do you remember (me|anything|us)|what did i (tell|say) you|did i tell you|whats my name|what is my name|do you know (me|my name|who i am)|what have i told you|do you keep notes|what do you remember about us/i;
+    if (RECALL_RE.test(q)) return { cmd: 'recall' };
+    return null;
+}
+
+// Best-effort capture of facts the user states in passing ("I use Linux",
+// "my name is X"). Deliberately conservative: short declarative sentences
+// that match recognizable self-disclosure patterns; questions, commands,
+// and long-winded statements are skipped so we don't store junk.
+const FACT_STARTERS = [
+    /\bmy name is\s+/i, /\bcall me\s+/i, /\bi['’ ]?m (a|an|not|currently|into|really into|from)\s+/i,
+    /\bi am (a|an|not|currently|into|really into|from)\s+/i,
+    /\bi like\s+/i, /\bi love\s+/i, /\bi hate\s+/i, /\bi dislike\s+/i, /\bi prefer\s+/i,
+    /\bi use\s+/i, /\bi work (as|at|on|with|for)\s+/i, /\bi live (in|at|near)\s+/i,
+    /\bi play\s+/i, /\bi study\s+/i, /\bi (read|watch|listen to|drive|own|make|build|visit|cook|run|code|draw|play)\s+/i,
+    /\bi have (a|an|the|two|three|\d)\s+/i, /\bi want\s+/i, /\bi need\s+/i,
+    /\bi always\s+/i, /\bi never\s+/i,
+    /\bwe (are|use|like|love|hate|prefer|play|work|live|build|make)\s+/i,
+    /\bmy favorite\s+/i, /\bmy favourite\s+/i, /\bi was born\s+/i,
+];
+const FACT_EXCLUDE = /^(i|we)( have a question| want to (ask|know|see|find|find out|check|learn about)| need (help|to ask|to find|to check)| am asking| was wondering| am wondering| am looking for| need to know)/i;
+
+export function extractFacts(text) {
+    const facts = [];
+    const seen = new Set();
+    const sentences = String(text || '')
+        .split(/(?<=[.!?])\s+|\n/)
+        .map(s => s.trim())
+        .filter(Boolean);
+    for (const s of sentences) {
+        if (/[?]$/.test(s) || s.length > 240 || s.length < 4) continue;
+        let fact = null;
+        for (const re of FACT_STARTERS) {
+            if (re.test(s)) { fact = s; break; }
+        }
+        if (!fact) continue;
+        fact = fact.replace(/[.!]+$/, '').replace(/\s+/g, ' ').trim();
+        if (FACT_EXCLUDE.test(fact)) continue;
+        if (fact.length > 200) fact = fact.slice(0, 200);
+        if (!seen.has(fact)) { seen.add(fact); facts.push(fact); }
+    }
+    return facts.slice(0, 5);
+}
+
 export function detectIntent(query, history) {
     const q = String(query || '').trim();
     if (!q) return 'casual';

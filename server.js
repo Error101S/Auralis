@@ -7,8 +7,8 @@ import { fileURLToPath } from 'url';
 import session from 'express-session';
 import passport from 'passport';
 import { Strategy as GoogleStrategy } from 'passport-google-oauth20';
-import { findOrCreateUser, getUserById, updateUserApiKey } from './database.js';
-import { detectIntent, casualReply, solveCalculation, creativeReply, expandQuery, systemReply } from './intent.js';
+import { findOrCreateUser, getUserById, updateUserApiKey, getMemories, addMemory, deleteMemories } from './database.js';
+import { detectIntent, casualReply, solveCalculation, creativeReply, expandQuery, systemReply, memoryCommand, extractFacts } from './intent.js';
 import { Readability } from '@mozilla/readability';
 import { parseHTML } from 'linkedom';
 import TurndownService from 'turndown';
@@ -360,6 +360,25 @@ function conversationSection(history){
     return 'CONVERSATION CONTEXT (earlier turns in this chat, oldest first — for understanding follow-ups and references like "it", "that", or "earlier" ONLY; not research material):\n' + turns + '\n\n';
 }
 
+// Persistent memory: facts the user has told Auralis across ALL chats, keyed
+// by account (signed in) or a per-device anonymous id. Injected into prompts
+// as trusted context (never cited, never treated as research material).
+function memorySection(memories){
+    if (!memories || memories.length === 0) return '';
+    return 'USER MEMORY (things the user has told you across previous chats — trustworthy and personal when relevant to the question; never cite it, don\'t repeat what was already said verbatim, and don\'t invent more):\n' +
+        memories.slice(0, 12).map(m => '- ' + m).join('\n') + '\n\n';
+}
+
+async function persistFacts(owner, text){
+    if (!owner) return;
+    try {
+        const facts = extractFacts(text);
+        for (const f of facts) await addMemory(owner, f);
+    } catch (err) {
+        console.error('memory persist failed:', err.message);
+    }
+}
+
 // Simple intent + topic detection for the built-in (no-Gemini-key) synthesizer.
 const INTENTS = [
     { re: /\bhow\s+(do|to|can|does)/i, key: 'howto' },
@@ -447,7 +466,7 @@ app.post('/api/gemini-key', async (req, res) => {
 });
 
 app.post('/api/search', async (req, res) => {
-    const { query, apiKey: apiKeyFromBody, history } = req.body;
+    const { query, apiKey: apiKeyFromBody, history, memoryId } = req.body;
     if (!query || typeof query !== 'string' || !query.trim()) {
         return res.status(400).json({ error: 'Query is required' });
     }
@@ -464,6 +483,46 @@ app.post('/api/search', async (req, res) => {
             apiKey = process.env.GEMINI_API_KEY;
         }
         if (typeof apiKey === 'string') apiKey = apiKey.trim();
+
+        // Persistent memory owner: account when signed in, otherwise the
+        // per-device anonymous id the client sends (or the session as a
+        // last resort so memory commands still work).
+        const memoryOwner = req.isAuthenticated()
+            ? 'user:' + req.user.id
+            : (typeof memoryId === 'string' && memoryId.length >= 8 && memoryId.length <= 64 ? 'anon:' + memoryId : (req.sessionID ? 'sess:' + req.sessionID : null));
+
+        // 0a. Explicit memory commands — handled directly, never searched.
+        const memCmd = memoryCommand(trimmed);
+        if (memCmd) {
+            if (!memoryOwner) {
+                return res.json({ sources: [], text: "I can't keep memories for you right now — sign in or reload the page and try again.", model: 'auralis-local' });
+            }
+            if (memCmd.cmd === 'store') {
+                await addMemory(memoryOwner, memCmd.fact);
+                return res.json({ sources: [], text: `Got it — I'll remember: "${memCmd.fact}"`, model: 'auralis-local' });
+            }
+            if (memCmd.cmd === 'forget') {
+                const n = await deleteMemories(memoryOwner, memCmd.keyword);
+                return res.json({ sources: [], text: n > 0 ? `Forgot ${n} ${n === 1 ? 'memory' : 'memories'} matching that.` : `I don't have any memories matching that.`, model: 'auralis-local' });
+            }
+            const mems = await getMemories(memoryOwner);
+            const text = mems.length
+                ? 'Here\'s what I remember:\n\n' + mems.map(m => '- ' + m).join('\n')
+                : `I don't have any memories saved yet. Tell me things like "remember that I use Linux" and I'll keep them across chats.`;
+            return res.json({ sources: [], text, model: 'auralis-local' });
+        }
+
+        // Capture personal facts the user just stated (best-effort, async-safe).
+        await persistFacts(memoryOwner, trimmed);
+
+        // Load what we already know about this user across chats.
+        let memories = [];
+        try {
+            memories = memoryOwner ? await getMemories(memoryOwner) : [];
+        } catch (err) {
+            console.error('memory load failed:', err.message);
+        }
+        const memSection = memorySection(memories);
 
         const today = new Date().toISOString().slice(0, 10);
         const convSection = conversationSection(history);
@@ -497,7 +556,7 @@ app.post('/api/search', async (req, res) => {
         // present; otherwise a built-in response (honest about its limits).
         if (intent === 'creative') {
             if (apiKey) {
-                const promptText = `You are Auralis, a creative writing assistant. The user wants something created, not researched.\n\nToday is ${today}.\n\n${convSection}User's request: "${trimmed}"\n\nWrite exactly what they asked for, in the format, length, and tone they requested. Just deliver the creative work — no citations, no sources, no research framing, no explanations of what you did, no follow-up questions.`;
+                const promptText = `You are Auralis, a creative writing assistant. The user wants something created, not researched.\n\nToday is ${today}.\n\n${convSection}${memSection}User's request: "${trimmed}"\n\nWrite exactly what they asked for, in the format, length, and tone they requested. Just deliver the creative work — no citations, no sources, no research framing, no explanations of what you did, no follow-up questions.`;
                 try {
                     const result = await geminiGenerate(apiKey, promptText);
                     return res.json({
@@ -518,7 +577,7 @@ app.post('/api/search', async (req, res) => {
         // fall through to the search pipeline, since local synthesis needs
         // source material.)
         if (intent === 'knowledge' && apiKey) {
-            const promptText = `You are Auralis, a knowledgeable research assistant. Answer the user's question directly from your own knowledge — no web search, no sources, no citations.\n\nToday is ${today}.\n\n${convSection}User's question: "${trimmed}"\n\nAnswer accurately and concisely, matching length to the question. If the question concerns very recent events, prices, or fast-changing data that you can't know reliably, say so plainly and offer to search the live web instead. If you don't know, say you don't know — never guess. No citations, no source list, no research framing.`;
+            const promptText = `You are Auralis, a knowledgeable research assistant. Answer the user's question directly from your own knowledge — no web search, no sources, no citations.\n\nToday is ${today}.\n\n${convSection}${memSection}User's question: "${trimmed}"\n\nAnswer accurately and concisely, matching length to the question. If the question concerns very recent events, prices, or fast-changing data that you can't know reliably, say so plainly and offer to search the live web instead. If you don't know, say you don't know — never guess. No citations, no source list, no research framing.`;
             try {
                 const result = await geminiGenerate(apiKey, promptText);
                 return res.json({
@@ -592,7 +651,7 @@ Today is ${today}.
 
 User's question: "${trimmed}"
 
-${convSection}REFERENCE MATERIAL (numbered sources [1] through [${searchResults.length || 0}]; title + URL + evidence, for your use only — never describe this section or its inner workings):
+${convSection}${memSection}REFERENCE MATERIAL (numbered sources [1] through [${searchResults.length || 0}]; title + URL + evidence, for your use only — never describe this section or its inner workings):
 ${sourcesText}
 
 Use the conversation context above (if any) only to understand what the user is asking now — never cite it, and don't repeat earlier answers unless the user asks for a recap.

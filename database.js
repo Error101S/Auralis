@@ -27,6 +27,15 @@ db.serialize(() => {
             gemini_api_key TEXT
         )
     `);
+    db.run(`
+        CREATE TABLE IF NOT EXISTS memories (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner TEXT NOT NULL,
+            fact TEXT NOT NULL,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(owner, fact)
+        )
+    `);
 });
 
 // Helper function to find or create a user by Google ID
@@ -71,6 +80,49 @@ export const updateUserApiKey = (id, apiKey) => {
         db.run('UPDATE users SET gemini_api_key = ? WHERE id = ?', [apiKey, id], function(err) {
             if (err) return reject(err);
             resolve(this.changes);
+        });
+    });
+};
+
+// ---------- Persistent memory (facts the user told us across chats) ----------
+
+export const getMemories = (owner) => {
+    return new Promise((resolve, reject) => {
+        db.all('SELECT fact FROM memories WHERE owner = ? ORDER BY updated_at DESC, id DESC LIMIT 24', [owner], (err, rows) => {
+            if (err) return reject(err);
+            resolve((rows || []).map(r => r.fact));
+        });
+    });
+};
+
+export const addMemory = (owner, fact) => {
+    return new Promise((resolve, reject) => {
+        const clean = String(fact).trim();
+        if (!owner || !clean) return resolve(false);
+        db.run(
+            'INSERT INTO memories (owner, fact) VALUES (?, ?) ON CONFLICT(owner, fact) DO UPDATE SET updated_at = CURRENT_TIMESTAMP',
+            [owner, clean],
+            function(err) {
+                if (err) return reject(err);
+                // Keep the per-owner set bounded (30 most recent).
+                db.run(
+                    'DELETE FROM memories WHERE owner = ? AND id NOT IN (SELECT id FROM memories WHERE owner = ? ORDER BY updated_at DESC, id DESC LIMIT 29)',
+                    [owner, owner],
+                    (err2) => {
+                        if (err2) return reject(err2);
+                        resolve(true);
+                    }
+                );
+            }
+        );
+    });
+};
+
+export const deleteMemories = (owner, keyword) => {
+    return new Promise((resolve, reject) => {
+        db.run('DELETE FROM memories WHERE owner = ? AND fact LIKE ?', [owner, '%' + String(keyword) + '%'], function(err) {
+            if (err) return reject(err);
+            resolve(this.changes || 0);
         });
     });
 };

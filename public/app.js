@@ -457,6 +457,17 @@ function chatHistory(){
   if (out.length && out[out.length-1].role === 'user') out.pop();
   return out.slice(-8);
 }
+/* Persistent memory id: a stable per-device token so the server can attach
+   facts ("remember that X") to this user across ALL chats, even without an
+   account. Sent with every request. */
+function memoryId(){
+  let id = localStorage.getItem('auralis.memoryId');
+  if (!id){
+    id = 'm-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2,10);
+    localStorage.setItem('auralis.memoryId', id);
+  }
+  return id;
+}
 async function apiSearch(query){
   try {
     const ctrl = new AbortController();
@@ -464,7 +475,7 @@ async function apiSearch(query){
     const res = await fetch('/api/search', {
       method:'POST',
       headers:{ 'Content-Type':'application/json' },
-      body: JSON.stringify({ query, apiKey: savedGeminiKey() || undefined, history: chatHistory() }),
+      body: JSON.stringify({ query, apiKey: savedGeminiKey() || undefined, history: chatHistory(), memoryId: memoryId() }),
       signal: ctrl.signal,
     });
     clearTimeout(timer);
