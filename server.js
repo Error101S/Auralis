@@ -7,7 +7,7 @@ import { fileURLToPath } from 'url';
 import session from 'express-session';
 import passport from 'passport';
 import { Strategy as GoogleStrategy } from 'passport-google-oauth20';
-import { findOrCreateUser, getUserById, updateUserApiKey, getMemories, addMemory, deleteMemories, SqliteSessionStore } from './database.js';
+import { findOrCreateUser, getUserById, updateUserApiKey, getMemories, addMemory, deleteMemories, logMessage, getRecentChat, SqliteSessionStore } from './database.js';
 import { detectIntent, casualReply, solveCalculation, creativeReply, expandQuery, systemReply, memoryCommand, extractFacts } from './intent.js';
 import { Readability } from '@mozilla/readability';
 import { parseHTML } from 'linkedom';
@@ -507,11 +507,23 @@ app.post('/api/search', async (req, res) => {
                 return res.json({ sources: [], text: n > 0 ? `Forgot ${n} ${n === 1 ? 'memory' : 'memories'} matching that.` : `I don't have any memories matching that.`, model: 'auralis-local' });
             }
             const mems = await getMemories(memoryOwner);
-            const text = mems.length
-                ? 'Here\'s what I remember:\n\n' + mems.map(m => '- ' + m).join('\n')
-                : `I don't have any memories saved yet. Tell me things like "remember that I use Linux" and I'll keep them across chats.`;
+            const recent = await getRecentChat(memoryOwner, 10);
+            const recentTopics = recent.filter(r => r.role === 'user').map(r => '- ' + r.text);
+            let text = '';
+            if (mems.length) {
+                text += 'Here\'s what I remember:\n\n' + mems.map(m => '- ' + m).join('\n') + '\n\n';
+            }
+            if (recentTopics.length) {
+                text += 'What we talked about recently:\n\n' + recentTopics.join('\n');
+            } else if (!text) {
+                text = 'I don\'t have any memories saved yet. Tell me things like "remember that I use Linux" and I\'ll keep them across chats.';
+            }
             return res.json({ sources: [], text, model: 'auralis-local' });
         }
+
+        // Keep a per-user chat log so "what did we talk about" can be answered.
+
+        await logMessage(memoryOwner, 'user', trimmed);
 
         // Capture personal facts the user just stated (best-effort, async-safe).
         await persistFacts(memoryOwner, trimmed);

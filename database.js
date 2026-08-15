@@ -44,6 +44,15 @@ db.serialize(() => {
             expire INTEGER NOT NULL
         )
     `);
+    db.run(`
+        CREATE TABLE IF NOT EXISTS chat_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner TEXT NOT NULL,
+            role TEXT NOT NULL,
+            text TEXT NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    `);
 });
 
 // SQLite-backed session store for express-session (replaces the in-memory
@@ -164,6 +173,33 @@ export const deleteMemories = (owner, keyword) => {
         db.run('DELETE FROM memories WHERE owner = ? AND fact LIKE ?', [owner, '%' + String(keyword) + '%'], function(err) {
             if (err) return reject(err);
             resolve(this.changes || 0);
+        });
+    });
+};
+
+// ---------- Chat log (what the user asked us, so "what did we talk about" can be answered) ----------
+
+export const logMessage = (owner, role, text) => {
+    return new Promise((resolve) => {
+        const clean = String(text || '').replace(/\s+/g, ' ').trim().slice(0, 300);
+        if (!owner || !clean) return resolve(false);
+        db.run('INSERT INTO chat_log (owner, role, text) VALUES (?, ?, ?)', [owner, role, clean], function(err) {
+            if (err) return resolve(false);
+            // Keep the per-owner log bounded (most recent 40 messages).
+            db.run(
+                'DELETE FROM chat_log WHERE owner = ? AND id NOT IN (SELECT id FROM chat_log WHERE owner = ? ORDER BY id DESC LIMIT 40)',
+                [owner, owner],
+                () => resolve(true)
+            );
+        });
+    });
+};
+
+export const getRecentChat = (owner, limit = 8) => {
+    return new Promise((resolve, reject) => {
+        db.all('SELECT role, text FROM chat_log WHERE owner = ? ORDER BY id DESC LIMIT ?', [owner, limit], (err, rows) => {
+            if (err) return reject(err);
+            resolve((rows || []).reverse());
         });
     });
 };
