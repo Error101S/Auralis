@@ -8,14 +8,25 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    env:
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      RENDER_SERVICE_ID: ${{ secrets.RENDER_SERVICE_ID }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Trigger Render deploy (Render API v1)
+        if: env.RENDER_API_KEY != '' && env.RENDER_SERVICE_ID != ''
         run: |
           curl -fsS -X POST \
             "https://api.render.com/v1/services/${{ secrets.RENDER_SERVICE_ID }}/deploys" \
             -H "Authorization: Bearer ${{ secrets.RENDER_API_KEY }}" \
             -H "Content-Type: application/json" \
             -d '{"clearCache":"do_not_clear"}'
+
+      - name: Skip note (missing Render secrets)
+        if: env.RENDER_API_KEY == '' || env.RENDER_SERVICE_ID == ''
+        run: |
+          echo "Skipped: RENDER_API_KEY / RENDER_SERVICE_ID secrets not configured."
+          echo "Native Render auto-deploy (repo connection) still covers pushes."
+          echo "Add the secrets at: https://github.com/Error101S/Auralis/settings/secrets/actions"
