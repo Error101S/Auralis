@@ -30,7 +30,8 @@ const micChip = $('#micChip');
 const modelPanel = $('#modelPanel');
 const modelList = $('#modelList');
 const toasts = $('#toasts');
-const keyPanel = $('#keyPanel');
+const settingsWrap = $('#settingsWrap');
+const settingsBtn = $('#settingsBtn');
 const keyInput = $('#keyInput');
 const keyStatus = $('#keyStatus');
 const askPanel = $('#askPanel');
@@ -180,13 +181,72 @@ function deleteChat(id,e){
 }
 
 /* ---------- Sidebar render ---------- */
+let renamingChatId = null;
+function chatItemEl(c){
+  const it = document.createElement('div');
+  it.className = 'chat-item' + (c.id===state.currentChatId?' active':'') + (c.pinned?' pinned':'');
+  it.dataset.id = c.id;
+  if (renamingChatId === c.id){
+    it.innerHTML = `<input class="ci-rename" type="text" value="${escapeHtml(c.title)}" maxlength="70" aria-label="Chat name">`;
+    const input = it.querySelector('.ci-rename');
+    requestAnimationFrame(()=>{
+      input.focus();
+      input.select();
+    });
+    const commit = ()=>{
+      const v = input.value.trim();
+      renamingChatId = null;
+      if (v && v !== c.title){ c.title = v; c.updatedAt = Date.now(); }
+      saveChats(); renderBoth();
+    };
+    input.addEventListener('keydown',(e)=>{
+      e.stopPropagation();
+      if (e.key==='Enter'){ e.preventDefault(); commit(); }
+      if (e.key==='Escape'){ e.stopPropagation(); renamingChatId = null; renderBoth(); }
+    });
+    input.addEventListener('blur', commit);
+    input.addEventListener('click',(e)=>e.stopPropagation());
+    return it;
+  }
+  it.innerHTML = `
+    ${c.pinned ? '<span class="ci-pinmark" title="Pinned">📌</span>' : ''}
+    <span class="ci-title">${escapeHtml(c.title)}</span>
+    <button class="ci-btn ci-pin" title="${c.pinned?'Unpin':'Pin'} chat">📌</button>
+    <button class="ci-btn ci-ren" title="Rename chat">✎</button>
+    <button class="ci-btn ci-del" title="Delete chat">✕</button>`;
+  it.addEventListener('click',()=>openChat(c.id));
+  it.querySelector('.ci-pin').addEventListener('click',(e)=>{
+    e.stopPropagation();
+    c.pinned = !c.pinned;
+    saveChats(); renderSidebar();
+  });
+  it.querySelector('.ci-ren').addEventListener('click',(e)=>{
+    e.stopPropagation();
+    renamingChatId = c.id;
+    renderSidebar();
+  });
+  it.querySelector('.ci-del').addEventListener('click',(e)=>deleteChat(c.id,e));
+  return it;
+}
+
 function renderSidebar(){
   chatList.innerHTML = '';
   const sorted = [...state.chats].sort((a,b)=>b.updatedAt-a.updatedAt);
-  let lastKey = null;
+  const pinned = sorted.filter(c=>c.pinned);
+  const rest = sorted.filter(c=>!c.pinned);
   const q = (chatSearch.value||'').toLowerCase().trim();
-  sorted.forEach(c=>{
-    if (q && !c.title.toLowerCase().includes(q) && !c.messages.some(m=>m.text.toLowerCase().includes(q))) return;
+  const matches = (c)=> !q || c.title.toLowerCase().includes(q) || c.messages.some(m=>m.text.toLowerCase().includes(q));
+
+  if (pinned.length){
+    const sep = document.createElement('div');
+    sep.className = 'date-sep pin-sep';
+    sep.textContent = '📌 Pinned';
+    chatList.appendChild(sep);
+    pinned.filter(matches).forEach(c=>chatList.appendChild(chatItemEl(c)));
+  }
+
+  let lastKey = null;
+  rest.filter(matches).forEach(c=>{
     const dk = dayKey(c.updatedAt);
     if (dk !== lastKey){
       const sep = document.createElement('div');
@@ -210,16 +270,7 @@ function renderSidebar(){
       chatList.appendChild(sep);
       lastKey = dk;
     }
-    const it = document.createElement('div');
-    it.className = 'chat-item' + (c.id===state.currentChatId?' active':'');
-    it.dataset.id = c.id;
-    it.innerHTML = `
-      <span class="ci-dot"></span>
-      <span class="ci-title">${escapeHtml(c.title)}</span>
-      <button class="ci-del" title="Delete">✕</button>`;
-    it.addEventListener('click',()=>openChat(c.id));
-    it.querySelector('.ci-del').addEventListener('click',(e)=>deleteChat(c.id,e));
-    chatList.appendChild(it);
+    chatList.appendChild(chatItemEl(c));
   });
   if (chatList.children.length===0){
     const e = document.createElement('div');
@@ -588,7 +639,7 @@ function chatHistory(){
     else if (m.role === 'ai' && m.text && m.text.trim()) out.push({ role:'assistant', text:m.text });
   }
   if (out.length && out[out.length-1].role === 'user') out.pop();
-  return out.slice(-8);
+  return out.slice(-12);
 }
 /* Persistent memory id: a stable per-device token so the server can attach
    facts ("remember that X") to this user across ALL chats, even without an
@@ -621,7 +672,7 @@ function rememberLocalChat(q){
     localStorage.setItem(CHATLOG_KEY, JSON.stringify(arr.slice(-20)));
   }catch{}
 }
-async function apiSearch(query, { browser = false, web = true, deep = false, attachment = null, signal = null } = {}){
+async function apiSearch(query, { browser = false, web = true, deep = false, attachment = null, signal = null, onLog = null } = {}){
   rememberLocalChat(query);
   try {
     const ctrl = new AbortController();
@@ -643,7 +694,9 @@ async function apiSearch(query, { browser = false, web = true, deep = false, att
           browserSynthesis: !!browser,
           web: !!web,
           deep: !!deep,
+          stream: true, // NDJSON progress: what he's searching, reading, writing
           geminiKey: getGeminiKey(),
+          instructions: getInstructions(),
           attachment: attachment && attachment.text ? { name: attachment.name, text: attachment.text } : null,
           history: chatHistory(),
           memoryId: memoryId(),
@@ -656,6 +709,30 @@ async function apiSearch(query, { browser = false, web = true, deep = false, att
       if (signal) signal.removeEventListener('abort', onOuterAbort);
     }
     if (!res.ok) return null;
+    // NDJSON stream: {"t":"log","msg":...} lines, then {"t":"result",...}
+    const ct = res.headers.get('content-type') || '';
+    if (ct.includes('ndjson') && res.body){
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = '', result = null;
+      while (true){
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let nl;
+        while ((nl = buf.indexOf('\n')) >= 0){
+          const line = buf.slice(0, nl).trim();
+          buf = buf.slice(nl + 1);
+          if (!line) continue;
+          try {
+            const ev = JSON.parse(line);
+            if (ev.t === 'log'){ if (onLog) onLog(ev.msg); }
+            else if (ev.t === 'result') result = ev;
+          } catch {}
+        }
+      }
+      return result;
+    }
     return await res.json();
   } catch {
     return null;
@@ -964,7 +1041,8 @@ async function fetchAnswer(userText, opts){
     web: opts.web !== false,
     deep: !!opts.deep,
     attachment: opts.attachment || null,
-    signal: opts.signal || null
+    signal: opts.signal || null,
+    onLog: opts.onLog || null
   };
   let api = await apiSearch(userText, callOpts);
   if (api && Array.isArray(api.sources)){
@@ -972,7 +1050,10 @@ async function fetchAnswer(userText, opts){
       // Server returned enriched sources (browser mode). Reason over them
       // locally in the browser with the LFM research model.
       let localText = null;
-      try { localText = await window.LocalAI.answer(userText, api.sources, opts.attachment); }
+      try {
+        if (opts.onLog) opts.onLog('Your browser model is writing the answer…');
+        localText = await window.LocalAI.answer(userText, api.sources, opts.attachment, chatHistory(), getInstructions());
+      }
       catch { localText = null; }
       if (stopRequested) return null;
       if (localText && localText.text){
@@ -1083,7 +1164,7 @@ async function runPipeline(userText, opts){
         if (vs.state !== 'ready'){
           const choice = await askVisionDownload();
           if (choice === 'gemini'){
-            openKeyPanel();
+            openSettings('keys');
             throw new Error('Image analysis paused — save a Gemini key, then send the image again.');
           }
           if (choice === 'cancel') throw new Error('Image analysis cancelled.');
@@ -1131,20 +1212,21 @@ async function runPipeline(userText, opts){
       text = visionText;
       provider = visionBy === 'gemini' ? 'gemini-vision' : 'local-vision';
     } else {
-      stage.step(opts.web === false
-        ? 'Web search is off — answering from knowledge' + (attachment ? ' + attachments' : '') + '…'
-        : `Searching the live web for “${query.slice(0, 90)}”…`);
-      const got = await fetchAnswer(query, Object.assign({}, opts, { attachment, signal }));
+      if (opts.web !== false) stage.step(`Searching the live web for “${query.slice(0, 90)}”…`);
+      else stage.step('Web search is off — answering from knowledge' + (attachment ? ' + attachments' : '') + '…');
+      const got = await fetchAnswer(query, Object.assign({}, opts, {
+        attachment, signal,
+        onLog: (msg)=>stage.step(msg)
+      }));
       if (stopRequested) throw new DOMException('stopped', 'AbortError');
       if (got){
         sources = got.sources; text = got.text; provider = got.provider;
         if (sources.length){
-          stage.step(`Found ${sources.length} source${sources.length>1?'s':''}:`);
+          stage.step(`Collected ${sources.length} source${sources.length>1?'s':''}:`);
           sources.slice(0, 10).forEach(s => stage.step(`· ${s.title.slice(0, 70)} — ${s.displayUrl}`));
         } else {
           stage.step('No live results came back — answering without web citations.');
         }
-        stage.step('Synthesizing the answer…');
       }
     }
 
@@ -1517,7 +1599,7 @@ function pickPlusItem(it){
   if (it.key === 'deep') { state.settings.deep = !state.settings.deep; saveSettings(); renderPlusMenuLater(); }
   if (it.key === 'attach'){ fileInput.click(); }
   if (it.key === 'voice'){ toggleDictation(); }
-  if (it.key === 'key'){ openKeyPanel(); }
+  if (it.key === 'key'){ openSettings('keys'); }
   if (it.key === 'model'){ openModelPanel(); }
 }
 function renderPlusMenuLater(){ setTimeout(()=>{ renderPlusMenu(); plusMenu.hidden=false; }, 10); }
@@ -1786,7 +1868,11 @@ function renderModelList(){
   });
 }
 
-/* ---------- Gemini API key panel (set / change / remove) ---------- */
+/* ---------- Settings (tabbed): API keys · Instructions · Appearance · About ---------- */
+const INSTRUCTIONS_KEY = 'auralis.instructions';
+const THEME_KEY = 'auralis.theme';
+function getInstructions(){ try { return localStorage.getItem(INSTRUCTIONS_KEY) || ''; } catch { return ''; } }
+
 function updateKeyStatus(){
   const k = getGeminiKey();
   keyStatus.textContent = k
@@ -1794,35 +1880,79 @@ function updateKeyStatus(){
     : 'No key saved — the local model handles answers.';
   keyStatus.classList.toggle('set', !!k);
 }
-function openKeyPanel(){
-  keyInput.value = getGeminiKey();
+
+function openSettings(tab){
+  settingsWrap.hidden = false;
   updateKeyStatus();
-  keyPanel.hidden = false;
-  setTimeout(()=>{ try { keyInput.focus(); } catch {} }, 60);
+  const instr = getInstructions();
+  const instrBox = document.getElementById('instructionsInput');
+  if (instrBox && instrBox.value !== instr) instrBox.value = instr;
+  if (tab) activateSettingsTab(tab);
+  else { const active = settingsWrap.querySelector('.set-tab.active'); if (active) activateSettingsTab(active.dataset.tab); }
 }
-function closeKeyPanel(){ keyPanel.hidden = true; }
+function closeSettings(){ settingsWrap.hidden = true; }
+function activateSettingsTab(tab){
+  settingsWrap.querySelectorAll('.set-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+  settingsWrap.querySelectorAll('.set-pane').forEach(p => p.classList.toggle('active', p.dataset.pane === tab));
+}
+settingsBtn.addEventListener('click', ()=>openSettings());
+document.getElementById('settingsClose').addEventListener('click', closeSettings);
+settingsWrap.addEventListener('mousedown',(e)=>{ if (e.target === settingsWrap) closeSettings(); });
+settingsWrap.querySelectorAll('.set-tab').forEach(b=>{
+  b.addEventListener('click', ()=>activateSettingsTab(b.dataset.tab));
+});
+document.addEventListener('keydown',(e)=>{
+  if (e.key === 'Escape' && !settingsWrap.hidden){ e.stopPropagation(); closeSettings(); }
+});
+
 function saveGeminiKeyFromInput(){
   const v = keyInput.value.trim();
   if (v.length < 20){ toast('That doesn\'t look like a Gemini API key (they usually start with "AIza…").', 'error'); return; }
   setGeminiKey(v);
-  closeKeyPanel();
-  updateProviderStatus();
+  updateKeyStatus();
   toast('Gemini API key saved — Auralis will use Gemini from the next message.');
 }
 function removeGeminiKeyFromInput(){
   clearGeminiKey();
   keyInput.value = '';
-  closeKeyPanel();
-  updateProviderStatus();
+  updateKeyStatus();
   toast('Gemini API key removed — the local model takes over again.');
 }
-document.getElementById('keyPanelClose').addEventListener('click', closeKeyPanel);
 document.getElementById('keySave').addEventListener('click', saveGeminiKeyFromInput);
 document.getElementById('keyRemove').addEventListener('click', removeGeminiKeyFromInput);
 keyInput.addEventListener('keydown',(e)=>{
   if (e.key === 'Enter'){ e.preventDefault(); saveGeminiKeyFromInput(); }
-  if (e.key === 'Escape'){ e.stopPropagation(); closeKeyPanel(); }
 });
+keyInput.addEventListener('input', ()=>{ if (!keyInput.value.trim()) updateKeyStatus(); });
+
+document.getElementById('instructionsSave').addEventListener('click', ()=>{
+  const box = document.getElementById('instructionsInput');
+  const v = (box.value || '').trim().slice(0, 2000);
+  try { localStorage.setItem(INSTRUCTIONS_KEY, v); } catch {}
+  toast(v ? 'Custom instructions saved — they apply from the next message. ✨' : 'Instructions cleared.');
+});
+document.getElementById('instructionsClear').addEventListener('click', ()=>{
+  document.getElementById('instructionsInput').value = '';
+  try { localStorage.removeItem(INSTRUCTIONS_KEY); } catch {}
+  toast('Instructions cleared.');
+});
+
+/* ---------- Theme: dark · light · system ---------- */
+const themeMedia = window.matchMedia('(prefers-color-scheme: light)');
+function getTheme(){ try { return localStorage.getItem(THEME_KEY) || 'dark'; } catch { return 'dark'; } }
+function applyTheme(t){
+  const light = t === 'light' || (t === 'system' && themeMedia.matches);
+  document.body.classList.toggle('light', light);
+}
+function setTheme(t){
+  try { localStorage.setItem(THEME_KEY, t); } catch {}
+  applyTheme(t);
+  settingsWrap.querySelectorAll('input[name="theme"]').forEach(r => { r.checked = r.value === t; });
+}
+settingsWrap.querySelectorAll('input[name="theme"]').forEach(r=>{
+  r.addEventListener('change', ()=>setTheme(r.value));
+});
+themeMedia.addEventListener('change', ()=>{ if (getTheme() === 'system') applyTheme('system'); });
 
 /* ---------- No-key gate: chat without a Gemini key → ask to use local ---------- */
 let askResolve = null;
@@ -1860,7 +1990,7 @@ async function maybeAskAboutKey(){
   try { sessionStorage.setItem('auralis.keyAsked', '1'); } catch {}
   const choice = await askUseLocalModel();
   if (choice === 'key'){
-    openKeyPanel(); // takes effect from the next message
+    openSettings('keys'); // takes effect from the next message
   } else if (choice === 'local'){
     markLocalChosen();
     openModelPanel();
@@ -1901,6 +2031,11 @@ function playBoot(){
 function boot(){
   playBoot();
   loadState();
+  // Theme + custom instructions from Settings
+  applyTheme(getTheme());
+  setTheme(getTheme()); // sync the radio buttons
+  const instrBox = document.getElementById('instructionsInput');
+  if (instrBox) instrBox.value = getInstructions();
   // Warm up any local models the user previously opted into (cached after
   // the first download). Nothing downloads until the user asks via the
   // ＋ Tools → Local models panel; the server model covers the rest.
