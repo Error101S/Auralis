@@ -9,6 +9,7 @@
     "postinstall": "node -e \"if (process.platform === 'linux') { const { execSync } = require('child_process'); execSync('npm rebuild sqlite3 --build-from-source', { stdio: 'inherit' }); }\""
   },
   "dependencies": {
+    "@huggingface/transformers": "4.2.0",
     "@mozilla/readability": "^0.6.0",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",

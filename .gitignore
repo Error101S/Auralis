@@ -5,3 +5,11 @@ bun.lock
 database.sqlite
 *.sqlite
 pi-web-access-0.22.0/
+
+# local reference projects & scratch files (not part of the app)
+jcode/
+Local-Browser-AI-main/
+*.log
+tmp-*
+test-local*
+.vscode/

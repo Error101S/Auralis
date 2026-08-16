@@ -1,7 +1,10 @@
 /* ============================================================
    AURALIS — research AI app logic
    - Sends prompts to the real backend (/api/search): DuckDuckGo
-     search + Gemini synthesis, with source citations.
+     search + local LFM model synthesis, with source citations.
+   - Hybrid: if the browser can run the LFM research model (WebGPU),
+     synthesis happens locally in the browser; otherwise the backend
+     runs the same local model.
    - Falls back to a local offline demo engine when the server
      isn't reachable (e.g. opening index.html directly).
    ============================================================ */
@@ -27,6 +30,14 @@ const providerPop = $('#providerPop');
 const providerList = $('#providerList');
 const providerName = $('#providerName');
 const providerDot = $('#providerDot');
+const plusBtn = $('#plusBtn');
+const plusMenu = $('#plusMenu');
+const fileInput = $('#fileInput');
+const attachRow = $('#attachRow');
+const micChip = $('#micChip');
+const modelPanel = $('#modelPanel');
+const modelList = $('#modelList');
+const toasts = $('#toasts');
 
 /* ---------- Auralis logo ("Aurora Aperture": interlocking hexagonal iris + spark) ---------- */
 function logoSVG(size = 28, gid = 'g'){
@@ -56,6 +67,32 @@ let state = {
   currentChatId: null,
   settings: { provider:'auto', web:true, deep:false },
 };
+
+/* ---------- Pending attachments (kept in memory only; summaries are stored) ---------- */
+/* images: [{name, dataUrl, thumb}] · audios: [{name, file}] · docs: [{name, text}] */
+const pending = { images: [], audios: [], docs: [] };
+function hasPendingAttachments(){
+  return pending.images.length + pending.audios.length + pending.docs.length > 0;
+}
+function takeAttachments(){
+  const out = {
+    images: pending.images.slice(),
+    audios: pending.audios.slice(),
+    docs: pending.docs.slice(),
+    get empty(){ return !this.images.length && !this.audios.length && !this.docs.length; }
+  };
+  pending.images = []; pending.audios = []; pending.docs = [];
+  renderAttachRow();
+  return out;
+}
+function summarizeAttachments(atts){
+  if (!atts) return [];
+  const out = [];
+  (atts.images||[]).forEach(i=>out.push({ type:'image', name:i.name, thumb:i.thumb }));
+  (atts.audios||[]).forEach(a=>out.push({ type:'audio', name:a.name }));
+  (atts.docs ||[]).forEach(d=>out.push({ type:'doc',   name:d.name }));
+  return out;
+}
 
 function loadState(){
   try{
@@ -208,9 +245,26 @@ function renderMessages(){
 function renderUser(m){
   const el = document.createElement('div');
   el.className='msg user';
+  let att = '';
+  (m.attachments||[]).forEach(a=>{
+    if (a.type==='image' && a.thumb) att += `<img class="att-thumb" src="${a.thumb}" alt="${escapeHtml(a.name)}" title="${escapeHtml(a.name)}">`;
+    else if (a.type==='image') att += `<span class="att-chip">🖼 ${escapeHtml(a.name)}</span>`;
+    else if (a.type==='audio') att += `<span class="att-chip">🎙 ${escapeHtml(a.name)}</span>`;
+    else att += `<span class="att-chip">📄 ${escapeHtml(a.name)}</span>`;
+  });
   el.innerHTML = `<div class="avatar">Y</div>
-    <div class="body"><div class="bubble">${escapeHtml(m.text)}</div></div>`;
+    <div class="body"><div class="bubble">${att?`<div class="att-row">${att}</div>`:''}<div class="bubble-text">${escapeHtml(m.text)}</div></div></div>`;
   messages.appendChild(el);
+}
+
+/* ---------- Toasts ---------- */
+function toast(msg, kind){
+  if (!toasts) return;
+  const el = document.createElement('div');
+  el.className = 'toast' + (kind ? ' ' + kind : '');
+  el.textContent = msg;
+  toasts.appendChild(el);
+  setTimeout(()=>{ el.classList.add('out'); setTimeout(()=>el.remove(), 350); }, 4500);
 }
 
 function renderAI(m){
@@ -237,7 +291,8 @@ function renderAI(m){
   regen.addEventListener('click',()=>{
     const chat = currentChat();
     const userMsg = [...chat.messages].reverse().find(x=>x.role==='user');
-    if (userMsg) retry(userMsg.text, m.id);
+    if (userMsg && (userMsg.text||'').trim()) retry(userMsg.text, m.id);
+    else toast('Nothing to retry — that turn was attachment-only.');
   });
   messages.appendChild(el);
 }
@@ -384,7 +439,7 @@ function setSending(v){
   promptEl.disabled = false;
   updateQueueBadge();
 }
-function toggleSendBtn(){ sendBtn.disabled = !promptEl.value.trim() && !sendBtn.classList.contains('stop'); }
+function toggleSendBtn(){ sendBtn.disabled = !promptEl.value.trim() && !hasPendingAttachments() && !sendBtn.classList.contains('stop'); }
 
 /* ---------- Prompt queue (submit while streaming) ----------
    If the user submits while Auralis is still generating, the message goes
@@ -393,8 +448,8 @@ const promptQueue = [];
 function isBusy(){ return sendBtn.classList.contains('stop'); }
 function queueCount(){ return promptQueue.length; }
 
-function enqueuePrompt(text){
-  promptQueue.push(text);
+function enqueuePrompt(text, attachments){
+  promptQueue.push({ text, attachments });
   updateQueueBadge();
 }
 
@@ -431,12 +486,12 @@ async function drainQueue(){
     // Reset the stop flag so a previously-aborted stream doesn't kill the queued one.
     stopRequested = false;
     setSending(true);
-    await runPipelineDeferred(next);
+    await runPipelineDeferred(next.text, next.attachments);
     setSending(false);
     renderSidebar();
   }
 }
-function runPipelineDeferred(text){ return runPipeline(text, { deep: state.settings.deep }); }
+function runPipelineDeferred(text, attachments){ return runPipeline(text, { deep: state.settings.deep, web: state.settings.web, attachments }); }
 
 const sleep = (ms)=>new Promise(r=>setTimeout(r,ms));
 
@@ -488,15 +543,26 @@ function rememberLocalChat(q){
     localStorage.setItem(CHATLOG_KEY, JSON.stringify(arr.slice(-20)));
   }catch{}
 }
-async function apiSearch(query){
+async function apiSearch(query, { browser = false, web = true, deep = false, attachment = null } = {}){
   rememberLocalChat(query);
   try {
     const ctrl = new AbortController();
-    const timer = setTimeout(()=>ctrl.abort(), 12000);
+    // Server-side synthesis runs the local LFM model on CPU and can take a few
+    // minutes on long research prompts; the in-app Stop button aborts early.
+    const timer = setTimeout(()=>ctrl.abort(), 240000);
     const res = await fetch('/api/search', {
       method:'POST',
       headers:{ 'Content-Type':'application/json' },
-      body: JSON.stringify({ query, apiKey: savedGeminiKey() || undefined, history: chatHistory(), memoryId: memoryId(), localChatLog: localChatLog() }),
+      body: JSON.stringify({
+        query,
+        browserSynthesis: !!browser,
+        web: !!web,
+        deep: !!deep,
+        attachment: attachment && attachment.text ? { name: attachment.name, text: attachment.text } : null,
+        history: chatHistory(),
+        memoryId: memoryId(),
+        localChatLog: localChatLog()
+      }),
       signal: ctrl.signal,
     });
     clearTimeout(timer);
@@ -518,37 +584,21 @@ function normalizeSources(raw){
   }));
 }
 
-/* ---------- Gemini API key management (/gemini <key>) ---------- */
-const KEY_STORAGE = 'auralis.geminiKey';
-function savedGeminiKey(){ return localStorage.getItem(KEY_STORAGE) || ''; }
-function maskKey(k){
-  k = (k||'').trim();
-  if (k.length <= 8) return k.slice(0,2) + '…';
-  return k.slice(0,4) + '…' + k.slice(-3);
-}
+/* ---------- Local engine status (no API keys — models are local) ---------- */
 function updateProviderStatus(){
-  providerName.textContent = savedGeminiKey() ? 'gemini · key set' : 'duckduckgo + gemini';
-}
-async function saveGeminiKey(key){
-  key = key.trim();
-  localStorage.setItem(KEY_STORAGE, key);
-  updateProviderStatus();
-  try {
-    const res = await fetch('/api/gemini-key', {
-      method:'POST',
-      headers:{ 'Content-Type':'application/json' },
-      body: JSON.stringify({ apiKey: key }),
-    });
-    if (res.ok){
-      const data = await res.json();
-      return { rejected:false, verified: !!data.verified };
-    }
-    const data = await res.json().catch(()=>({}));
-    return { rejected:true, message: data.error || 'The server rejected the key.' };
-  } catch {
-    // No server (file:// or offline) — saved locally only.
-    return { rejected:false, verified:false };
+  if (!window.LocalAI || !providerName) return;
+  const st = window.LocalAI.status();
+  const downloading = Object.keys(st).find(k => st[k].state === 'downloading' || st[k].state === 'loading');
+  if (downloading){
+    const s = st[downloading];
+    providerName.textContent = s.state === 'downloading'
+      ? `auralis · downloading ${downloading} model ${s.percent || 0}%`
+      : `auralis · warming ${downloading} model…`;
+  } else {
+    const ready = window.LocalAI.isReady();
+    providerName.textContent = ready ? 'auralis · LFM 2.5 (browser)' : 'auralis · LFM 2.5 (server)';
   }
+  if (modelPanel && !modelPanel.hidden) renderModelList();
 }
 function addReplies(chat, userText, aiText){
   const now = Date.now();
@@ -617,8 +667,8 @@ function offlineReply(q, intent){
   }
   if (/\bjoke/.test(n)) return "Here's one: why did the database break up with the spreadsheet? Too many unresolved relationships.";
   if (/\b(poem|haiku|sonnet)/.test(n)) return "A small one:\n\nAnswers hide in pages,\nlit by a patient, bright search —\nknowledge comes to light.";
-  if (/\b(story about|write me|make me|tell me a)/.test(n)) return "Original fiction runs on my Gemini engine — add your free API key with /gemini <key> and I'll write it properly.";
-  return "That kind of creation runs on my Gemini engine — add your free API key with /gemini <key> and I'll make it happen.";
+  if (/\b(story about|write me|make me|tell me a)/.test(n)) return "I can write original fiction when I'm connected to my local model — right now I'm offline. Start the server (`npm start`) and try again.";
+  return "That kind of creation needs my local model — connect to the server (`npm start`) and I'll make it happen.";
 }
 const KNOWLEDGE = [
   {
@@ -761,126 +811,172 @@ function synthesize(query, depth, provider, sources){
 }
 
 /* ---------- The pipeline runner ---------- */
+function setStage(stage, name, detail){
+  if (!stage) return;
+  const t = stage.querySelector('.stage-text'), p = stage.querySelector('.providers');
+  if (t) t.textContent = name;
+  if (p) p.innerHTML = detail;
+}
+
+/* Shared synthesis: server research (or browser-local model) for a text
+   query. Returns { sources, text, provider } or null when unavailable. */
+async function fetchAnswer(userText, opts){
+  const browserReady = !!(window.LocalAI && window.LocalAI.isReady());
+  const callOpts = {
+    browser: browserReady,
+    web: opts.web !== false,
+    deep: !!opts.deep,
+    attachment: opts.attachment || null
+  };
+  let api = await apiSearch(userText, callOpts);
+  if (api && Array.isArray(api.sources)){
+    if (browserReady && api.mode === 'browser' && api.text == null){
+      // Server returned enriched sources (browser mode). Reason over them
+      // locally in the browser with the LFM research model.
+      let localText = null;
+      try { localText = await window.LocalAI.answer(userText, api.sources, opts.attachment); }
+      catch { localText = null; }
+      if (localText && localText.text){
+        return { sources: normalizeSources(api.sources), text: localText.text, provider: 'auralis-local (browser)' };
+      }
+      // Browser synthesis failed — fall back to the server's local model.
+      const srv = await apiSearch(userText, Object.assign({}, callOpts, { browser:false }));
+      if (srv && srv.text) return { sources: normalizeSources(srv.sources || []), text: srv.text, provider: 'auralis-local (server)' };
+    } else if (api.text){
+      return { sources: normalizeSources(api.sources), text: api.text, provider: 'auralis-local (server)' };
+    }
+  }
+  return null;
+}
+
 async function runPipeline(userText, opts){
+  const chat = currentChat();
+  let m;
   if (!opts.replace) {
-    const chat = currentChat();
-    const m = { id:uid(), role:'ai', text:'', sources:[], provider:'' };
+    m = { id:uid(), role:'ai', text:'', sources:[], provider:'' };
     chat.messages.push(m);
     chat.updatedAt = Date.now();
     saveChats();
     renderMessages();
-    const el = messages.querySelector(`.msg.ai[data-id="${m.id}"]`);
-    const bubble = el.querySelector('.bubble');
-    const aiAvatar = el.querySelector('.avatar-ai');
-    setLogoState(aiAvatar, 'thinking');
-
-    const stage = document.createElement('div');
-    stage.innerHTML = `<span class="spinner"></span>
-      <span class="stage-text">Preparing search…</span>
-      <span class="providers"></span>`;
-    bubble.appendChild(stage);
-
-    stopRequested = false;
-    const provider = 'server';
-
-    const stages = [
-      {name:'web_search', prov:'duckduckgo', text:'querying live results…'},
-      {name:'gemini', prov:'synthesis', text:'writing a grounded answer…'},
-      {name:'curator', prov:'citations', text:'attaching sources…'},
-    ];
-    let i=0;
-    const stageInterval = setInterval(()=>{
-      if (stopRequested){ clearInterval(stageInterval); return; }
-      if (i>=stages.length){ clearInterval(stageInterval); return; }
-      const s = stages[i];
-      stage.querySelector('.stage-text').textContent = `${s.name}()`;
-      stage.querySelector('.providers').innerHTML = `<span class="pv">${s.prov}</span> · ${s.text}`;
-      i++;
-    }, 700);
-
-    await sleep(800);
-    if (stopRequested){ clearInterval(stageInterval); stage.remove(); finish(m, chat, '_(stopped)_'); return; }
-
-    clearInterval(stageInterval);
-    stage.querySelector('.stage-text').textContent = `searching the live web…`;
-    stage.querySelector('.providers').innerHTML = `<span class="pv">duckduckgo</span> · 5 sources`;
-
-    // 1) Try the real backend
-    const api = await apiSearch(userText);
-    let sources, text;
-    if (api && api.text && api.sources){
-      sources = normalizeSources(api.sources);
-      text = api.text;
-      m.provider = 'duckduckgo + gemini';
-    } else {
-      // No server: classify the message locally so casual/calc/creative
-      // messages never get a fake research dump.
-      const oi = offlineDetect(userText);
-      if (oi === 'research'){
-        sources = makeSources(userText, opts.deep);
-        text = synthesize(userText, opts.deep, 'offline-demo', sources);
-      } else {
-        sources = [];
-        text = offlineReply(userText, oi);
-      }
-      m.provider = 'offline-demo';
-    }
-    m.sources = sources;
-    m.text = text;
-
-    if (stopRequested){ stage.remove(); finish(m, chat, '_(stopped)_'); return; }
-    stage.remove();
-
-    bubble.innerHTML='';
-    const answer = document.createElement('div');answer.className='answer';
-    bubble.appendChild(answer);
-    renderSourcesInto(bubble, sources);
-
-    const actRow = document.createElement('div');
-    actRow.className='actions';
-    actRow.innerHTML=`<button class="act copy"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke-width="2"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>Copy</button>`;
-    bubble.appendChild(actRow);
-    actRow.querySelector('.copy').addEventListener('click',()=>{
-      navigator.clipboard.writeText(m.text).then(()=>{actRow.querySelector('.copy').lastChild.textContent=' Copied';setTimeout(()=>actRow.querySelector('.copy').lastChild.textContent=' Copy',1400);});
-    });
-
-    await streamIntoMessage(el, m.text, 10, aiAvatar);
-    setLogoState(aiAvatar, 'idle');
-    saveChats();
   } else {
-    const m = opts.replace;
+    m = opts.replace;
     m.text=''; m.sources=[]; m.provider='';
+    saveChats();
     renderMessages();
     await sleep(50);
-    const el = messages.querySelector(`.msg.ai[data-id="${m.id}"]`);
-    if (!el){ return; }
-    const aiAvatar = el.querySelector('.avatar-ai');
-    setLogoState(aiAvatar, 'thinking');
-    const api = await apiSearch(userText);
-    let sources, text;
-    if (api && api.text && api.sources){
-      sources = normalizeSources(api.sources);
-      text = api.text;
-    } else {
-      const oi = offlineDetect(userText);
-      if (oi === 'research'){
-        sources = makeSources(userText, opts.deep);
-        text = synthesize(userText, opts.deep, 'offline-demo', sources);
-      } else {
-        sources = [];
-        text = offlineReply(userText, oi);
+  }
+  const el = messages.querySelector(`.msg.ai[data-id="${m.id}"]`);
+  if (!el){ return; }
+  const bubble = el.querySelector('.bubble');
+  const aiAvatar = el.querySelector('.avatar-ai');
+  setLogoState(aiAvatar, 'thinking');
+
+  const stage = document.createElement('div');
+  stage.innerHTML = `<span class="spinner"></span>
+    <span class="stage-text">Preparing…</span>
+    <span class="providers"></span>`;
+  bubble.appendChild(stage);
+
+  stopRequested = false;
+  let sources = [], text = null, provider = '';
+
+  try {
+    const att = opts.attachments || {};
+    const hadQuestion = !!(userText||'').trim();
+
+    // 1) Voice notes: transcribe attached audio locally (Whisper).
+    let transcript = '';
+    if (att.audios && att.audios.length){
+      for (const a of att.audios){
+        setStage(stage, 'transcribe_audio()', `<span class="pv">whisper · local</span> · transcribing ${escapeHtml(a.name)}…`);
+        const r = await window.LocalAI.transcribeFile(a.file);
+        transcript += (transcript ? '\n' : '') + (r.text || '');
+      }
+      if (!transcript.trim()) throw new Error('No speech detected in the attached audio.');
+    }
+
+    // 2) Images: analyze with the local vision model (LFM 2.5 VL).
+    let visionText = '';
+    if (att.images && att.images.length){
+      if (!(window.LocalAI && window.LocalAI.canAttempt())){
+        throw new Error('The vision model needs WebGPU — use Chrome, Edge, or Brave, or send the image without WebGPU.');
+      }
+      const vq = hadQuestion ? userText.trim() : 'Describe this image in detail.';
+      for (const img of att.images){
+        setStage(stage, 'vision()', `<span class="pv">lfm-vl · local</span> · analyzing ${escapeHtml(img.name)}…`);
+        const desc = await window.LocalAI.describeImage(img.dataUrl, vq);
+        if (desc && desc.trim()){
+          visionText += (visionText ? '\n\n' : '') + (att.images.length > 1 ? `**${img.name}** — ${desc}` : desc);
+        }
       }
     }
-    m.sources = sources;
-    m.text = text;
-    const bubble = el.querySelector('.bubble');
-    bubble.innerHTML='';
-    const answer=document.createElement('div');answer.className='answer';bubble.appendChild(answer);
-    renderSourcesInto(bubble, sources);
-    await streamIntoMessage(el, m.text, 10, aiAvatar);
-    setLogoState(aiAvatar, 'idle');
-    saveChats();
+
+    // 3) Build the query + attachment context for the research model.
+    let attachment = null;
+    if (att.docs && att.docs.length){
+      const joined = att.docs.map(d => `# ${d.name}\n${d.text || ''}`).join('\n\n').slice(0, 12000);
+      attachment = { name: att.docs.map(d=>d.name).join(', '), text: joined };
+    }
+    if (transcript){
+      attachment = attachment || { name: 'voice note', text: '' };
+      attachment.text = (attachment.text ? attachment.text + '\n\n' : '') + 'Voice note transcript:\n' + transcript;
+    }
+    if (visionText){
+      attachment = attachment || { name: 'image analysis', text: '' };
+      attachment.text = (attachment.text ? attachment.text + '\n\n' : '') +
+        'Local vision model analysis of the attached image(s):\n' + visionText;
+    }
+    let query = userText.trim();
+    if (!query && transcript) query = 'Summarize and respond to this voice note.';
+    if (!query && attachment) query = 'Summarize the attached file.';
+
+    // 4) Answer. Image-only turns (no question, or web off) are answered
+    //    directly by the vision model; everything else goes through research.
+    if (visionText && (!hadQuestion || opts.web === false)){
+      text = visionText;
+      provider = 'local-vision';
+    } else {
+      setStage(stage, 'web_search()', `<span class="pv">duckduckgo</span> · researching the live web…`);
+      const got = await fetchAnswer(query, Object.assign({}, opts, { attachment }));
+      if (got){ sources = got.sources; text = got.text; provider = got.provider; }
+    }
+
+    // 5) Offline fallback (no server reachable).
+    if (!text){
+      const oi = offlineDetect(query || userText);
+      if (oi === 'research'){
+        sources = makeSources(query || userText, opts.deep);
+        text = synthesize(query || userText, opts.deep, 'offline-demo', sources);
+      } else {
+        sources = [];
+        text = offlineReply(query || userText, oi);
+      }
+      provider = 'offline-demo';
+    }
+  } catch (err){
+    sources = [];
+    text = '⚠️ ' + (err && err.message ? err.message : 'Something went wrong while processing this turn.');
+    provider = 'error';
+    if (err && /aborted|AbortError/i.test(err.message||'')) stopRequested = true;
   }
+
+  if (stopRequested){ stage.remove(); finish(m, chat, '_(stopped)_'); return; }
+  stage.remove();
+
+  m.sources = sources;
+  m.text = text;
+  m.provider = provider;
+
+  bubble.innerHTML='';
+  const answer = document.createElement('div');answer.className='answer';
+  bubble.appendChild(answer);
+  renderSourcesInto(bubble, sources);
+  // Copy / Retry actions come from renderAI's actions row (outside the
+  // bubble), so nothing extra is appended here.
+
+  await streamIntoMessage(el, m.text, 10, aiAvatar);
+  setLogoState(aiAvatar, 'idle');
+  saveChats();
 }
 
 function finish(m, chat, text){ m.text = text; m.sources=[]; saveChats(); renderMessages(); }
@@ -888,26 +984,22 @@ function finish(m, chat, text){ m.text = text; m.sources=[]; saveChats(); render
 /* ---------- Send / retry ---------- */
 async function send(text){
   text = (text??'').trim();
-  if (!text) return;
+  if (!text && !hasPendingAttachments()) return;
+  const atts = text ? (hasPendingAttachments() ? takeAttachments() : { images:[], audios:[], docs:[] }) : takeAttachments();
+  const attSummary = summarizeAttachments(atts);
   let chat = currentChat();
   if (!chat){ newChat(); chat = currentChat(); }
 
-  // /gemini <api-key> command: save the key instead of doing a search
-  const cmd = text.match(/^\/gemini(\s+\S[\s\S]*)$/i);
-  if (cmd){
-    const key = cmd[1].trim();
-    if (!key){
-      addReplies(chat, text, `**Usage:** \`/gemini <your-api-key>\`\n\nPaste your key from [aistudio.google.com/apikey](https://aistudio.google.com/apikey).`);
-      return;
-    }
-    chat.title = 'Gemini API key';
-    chatTitle.textContent = chat.title;
-    chat.updatedAt = Date.now();
-    const info = await saveGeminiKey(key);
-    const aiText = info.rejected
-      ? `**⚠️ ${info.message}**\n\nYour key wasn't saved. Make sure it's the full key from [aistudio.google.com/apikey](https://aistudio.google.com/apikey), then try again.`
-      : `**✅ Gemini API key saved**${info.verified ? ' and verified against the Gemini API — it works.' : ' (stored locally — I couldn\'t verify it right now).'}\n\n\`${maskKey(key)}\`\nYour next search will use this key. Use \`/gemini <new-key>\` anytime to change it.`;
-    addReplies(chat, text, aiText);
+  // /model — report the local inference engines (no API keys)
+  if (/^\/model(\s.*)?$/i.test(text)){
+    const LA = window.LocalAI;
+    const st = LA ? LA.status() : {};
+    const line = (k, label) => {
+      const s = st[k] || { state:'idle' };
+      const map = { ready:'✓ downloaded & ready', downloading:`downloading ${s.percent||0}%`, loading:'warming up…', error:'error — '+(s.error||''), idle:'not downloaded' };
+      return `- **${label}** — ${map[s.state]||s.state}${s.state==='idle'&&LA&&LA.optedIn(k)?' (auto-loads on visit)':''}`;
+    };
+    addReplies(chat, text, `**Auralis local models** (everything runs on your device — no API keys)\n\n${line('text','Research · LFM 2.5 1.2B Thinking')}\n${line('vision','Vision · LFM 2.5 VL 450M — understands attached images')}\n${line('stt','Speech-to-text · Whisper — transcribes attached audio')}\n\nDownload or manage them via the **＋ Tools → Local models** panel. The research model also runs server-side as a fallback, so Auralis works before any download.`);
     return;
   }
 
@@ -923,30 +1015,18 @@ async function send(text){
     addReplies(chat, text, `Chat cleared. What would you like to research?`);
     return;
   }
-  // /key — show the currently-saved masked key
-  if (/^\/key(\s.*)?$/i.test(text)){
-    const k = savedGeminiKey();
-    addReplies(chat, text, k
-      ? `Your saved Gemini key is \`${maskKey(k)}\`.\n\nChange it with \`/gemini <new-key>\`, or just ask me something to use it.`
-      : `You haven't set a Gemini key yet. Type \`/gemini <your-api-key>\` to add one, or type \`/help\` for all commands.`);
-    return;
-  }
-  // /model — fetch which model the server is using (via a lightweight probe)
-  if (/^\/model(\s.*)?$/i.test(text)){
-    addReplies(chat, text, `The server auto-rotates across free-tier Gemini models. Type \`/gemini <your-key>\` to set your own key — Auralis will then use the best available free model for your requests automatically.`);
-    return;
-  }
   // /help — list all commands
   if (/^\/help(\s.*)?$/i.test(text)){
     const lines = COMMANDS.map(c => `- \`${c.name}\` — ${c.desc}`).join('\n');
-    addReplies(chat, text, `**Auralis commands**\n\n${lines}\n\nTip: type \`/\` in the prompt box and a menu pops up with arrow-key navigation.`);
+    addReplies(chat, text, `**Auralis commands**\n\n${lines}\n\nTip: type \`/\` in the prompt box and a menu pops up with arrow-key navigation. Use the **＋** button for web/deep toggles, file attachments (images use the local Vision model, audio gets transcribed), voice dictation, and local model downloads.`);
     return;
   }
 
-  chat.messages.push({ id:uid(), role:'user', text });
+  chat.messages.push({ id:uid(), role:'user', text, attachments: attSummary });
 
-  if (chat.title==='New research' && chat.messages.filter(m=>m.role==='user').length===1){
-    chat.title = titleFrom(text);
+  const firstUser = chat.messages.filter(m=>m.role==='user').length===1;
+  if (chat.title==='New research' && firstUser){
+    chat.title = titleFrom(text || (attSummary[0] ? attSummary[0].name : '') || 'Attachment');
     chatTitle.textContent = chat.title;
   }
   chat.updatedAt = Date.now();
@@ -956,14 +1036,15 @@ async function send(text){
   promptEl.value='';promptEl.style.height='auto';
   toggleSendBtn();
 
+  const turnText = text || '';
   // If Auralis is already streaming, queue this message instead of blocking
   // or discarding it. It auto-fires when the active stream finishes.
   if (isBusy()){
-    enqueuePrompt(text);
+    enqueuePrompt(turnText, atts);
     return;
   }
   setSending(true);
-  await runPipeline(text, { deep: state.settings.deep });
+  await runPipeline(turnText, { deep: state.settings.deep, web: state.settings.web, attachments: atts });
   setSending(false);
   renderSidebar();
   // Auto-fire any prompts that were queued while this one ran.
@@ -975,7 +1056,7 @@ async function retry(text, replaceId){
   const m = chat.messages.find(x=>x.id===replaceId);
   if (!m) return;
   stopRequested=false; setSending(true);
-  await runPipeline(text, { deep: state.settings.deep, replace:m });
+  await runPipeline(text, { deep: state.settings.deep, web: state.settings.web, replace:m });
   setSending(false);
   renderSidebar();
   // Auto-fire any prompts that were queued while this retry ran.
@@ -1100,21 +1181,13 @@ exportBtn.addEventListener('click',()=>{
 /* ---------- Slash command menu ---------- */
 const cmdMenu = document.getElementById('cmdMenu');
 
-// Official Gemini sparkle (4-point concave star) with Gemini's brand gradient for the /gemini icon.
-const GEMINI_ICON = `<svg viewBox="0 0 100 100" width="18" height="18" aria-hidden="true">
-  <defs><linearGradient id="gmIco" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#4285F4"/><stop offset="0.5" stop-color="#9B72CB"/><stop offset="1" stop-color="#D96570"/></linearGradient></defs>
-  <path d="M50 4 C54 32 68 46 96 50 C68 54 54 68 50 96 C46 68 32 54 4 50 C32 46 46 32 50 4 Z" fill="url(#gmIco)"/>
-</svg>`;
 const CLEAR_ICON = `<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6M10 11v6M14 11v6"/></svg>`;
 const MODEL_ICON = `<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2 3 7l9 5 9-5-9-5Z"/><path d="m3 12 9 5 9-5M3 17l9 5 9-5"/></svg>`;
-const KEY_ICON = `<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7.5 15.5" r="4.5"/><path d="M10.8 12.2 21 2M17 6l2.5 2.5M14 9l2.5 2.5"/></svg>`;
 const HELP_ICON = `<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.1 9a2.9 2.9 0 1 1 5.8 0c0 2-2.9 2-2.9 4"/><path d="M12 17h.01"/></svg>`;
 
 const COMMANDS = [
-  { name:'/gemini <key>',  icon: GEMINI_ICON, hint:'apiKey',     desc:'Set & verify your Gemini API key (overrides the server key for your requests)' },
   { name:'/clear',          icon: CLEAR_ICON,  hint:'',          desc:'Clear the current chat history' },
-  { name:'/model',          icon: MODEL_ICON,  hint:'',          desc:'Show which Gemini model Auralis is using right now' },
-  { name:'/key',            icon: KEY_ICON,    hint:'',          desc:'Show your currently-saved Gemini key (masked)' },
+  { name:'/model',          icon: MODEL_ICON,  hint:'',          desc:'Show which model Auralis is running locally' },
   { name:'/help',           icon: HELP_ICON,   hint:'',          desc:'List all available commands' },
 ];
 let cmdActiveIdx = 0;
@@ -1196,12 +1269,319 @@ promptEl.addEventListener('keydown',(e)=>{
   }
 }, { capture:true });
 
-/* ---------- Boot ---------- */
+/* ============================================================
+   ＋ TOOLS MENU · ATTACHMENTS · VOICE · LOCAL MODEL MANAGER
+   ============================================================ */
+
+/* ---------- Plus (tools) menu ---------- */
+const PLUS_ICONS = {
+  web:   `<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.5 3 14.5 0 18M12 3c-3 3.5-3 14.5 0 18"/></svg>`,
+  deep:  `<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 4h16v16H4z"/><path d="M4 9h16M9 4v16"/></svg>`,
+  attach:`<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>`,
+  voice: `<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>`,
+  model: `<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 3 7l9 5 9-5-9-5Z"/><path d="m3 12 9 5 9-5M3 17l9 5 9-5"/></svg>`
+};
+
+function plusItems(){
+  return [
+    { key:'web',   icon:PLUS_ICONS.web,   name:'Web search',   desc:'Search the live web for grounded, cited answers', toggle:state.settings.web },
+    { key:'deep',  icon:PLUS_ICONS.deep,  name:'Deep research',desc:'More results + full page content for deeper reports', toggle:state.settings.deep },
+    { key:'attach',icon:PLUS_ICONS.attach,name:'Attach file',  desc:'Images (local Vision model) · audio (transcribed) · PDF & text docs' },
+    { key:'voice', icon:PLUS_ICONS.voice, name:'Voice input',  desc:'Dictate with your microphone — no download needed' },
+    { key:'model', icon:PLUS_ICONS.model, name:'Local models', desc:'Download the research / vision / speech models on your terms' },
+  ];
+}
+
+function renderPlusMenu(){
+  const items = plusItems();
+  plusMenu.innerHTML = `<div class="cmd-menu-head">Tools</div>` +
+    items.map((it,i)=>`
+    <div class="cmd-menu-item" data-idx="${i}">
+      <span class="cmd-menu-ico">${it.icon}</span>
+      <span class="cmd-menu-body"><span class="cmd-menu-name">${escapeHtml(it.name)}</span><span class="cmd-menu-desc">${escapeHtml(it.desc)}</span></span>
+      ${it.toggle === true || it.toggle === false ? `<span class="pm-check ${it.toggle?'on':''}">${it.toggle?'✓':''}</span>` : ''}
+    </div>`).join('');
+  plusMenu.querySelectorAll('.cmd-menu-item').forEach(el=>{
+    // stopPropagation: pickPlusItem clears the menu (detaching this node) and
+    // may open a panel — the document-level closers must not see this event.
+    el.addEventListener('mousedown',(e)=>{ e.preventDefault(); e.stopPropagation(); pickPlusItem(items[Number(el.dataset.idx)]); });
+  });
+}
+function hidePlusMenu(){ plusMenu.hidden = true; plusMenu.innerHTML=''; }
+function pickPlusItem(it){
+  hidePlusMenu();
+  if (!it) return;
+  if (it.key === 'web')  { webToggle.click();  renderPlusMenuLater(); }
+  if (it.key === 'deep') { deepToggle.click(); renderPlusMenuLater(); }
+  if (it.key === 'attach'){ fileInput.click(); }
+  if (it.key === 'voice'){ toggleDictation(); }
+  if (it.key === 'model'){ openModelPanel(); }
+}
+function renderPlusMenuLater(){ setTimeout(()=>{ renderPlusMenu(); plusMenu.hidden=false; }, 10); }
+
+plusBtn.addEventListener('click',()=>{
+  if (plusMenu.hidden){ renderPlusMenu(); plusMenu.hidden = false; }
+  else hidePlusMenu();
+});
+document.addEventListener('mousedown',(e)=>{
+  if (!plusMenu.hidden && !plusMenu.contains(e.target) && !plusBtn.contains(e.target)) hidePlusMenu();
+});
+
+/* ---------- Attachments ---------- */
+function readAsDataURL(file){
+  return new Promise((res,rej)=>{
+    const r = new FileReader();
+    r.onload = ()=>res(r.result);
+    r.onerror = ()=>rej(new Error('Could not read '+file.name));
+    r.readAsDataURL(file);
+  });
+}
+function fileToThumb(file){
+  return new Promise(res=>{
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = ()=>{
+      const s = 128;
+      const scale = Math.min(s/img.naturalWidth, s/img.naturalHeight, 1);
+      const c = document.createElement('canvas');
+      c.width = Math.max(1, Math.round(img.naturalWidth*scale));
+      c.height = Math.max(1, Math.round(img.naturalHeight*scale));
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(url);
+      try { res(c.toDataURL('image/jpeg', 0.8)); } catch { res(''); }
+    };
+    img.onerror = ()=>{ URL.revokeObjectURL(url); res(''); };
+    img.src = url;
+  });
+}
+
+/* PDF text extraction — pdf.js loads lazily from the CDN only when a PDF
+   is actually attached (the same on-demand pattern Local-Browser-AI uses). */
+let _pdfjs = null;
+function pdfjs(){
+  return _pdfjs || (_pdfjs = import('https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.min.mjs').then(m=>{
+    m.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.worker.min.mjs';
+    return m;
+  }));
+}
+async function extractPdfText(file){
+  const m = await pdfjs();
+  const buf = await file.arrayBuffer();
+  const pdf = await m.getDocument({ data: buf }).promise;
+  let out = '';
+  const max = Math.min(pdf.numPages, 20);
+  for (let i=1; i<=max; i++){
+    const page = await pdf.getPage(i);
+    const tc = await page.getTextContent();
+    out += tc.items.map(it=>it.str).join(' ') + '\n';
+  }
+  return out.trim();
+}
+
+async function attachFiles(list){
+  for (const f of Array.from(list || [])){
+    try {
+      if (f.type.startsWith('image/')){
+        const dataUrl = await readAsDataURL(f);
+        const thumb = await fileToThumb(f);
+        pending.images.push({ name:f.name || 'image', dataUrl, thumb });
+      } else if (f.type.startsWith('audio/')){
+        pending.audios.push({ name:f.name || 'audio', file:f });
+      } else if (/\.pdf$/i.test(f.name)){
+        const text = await extractPdfText(f);
+        if (!text) throw new Error('no extractable text (scanned PDF?)');
+        pending.docs.push({ name:f.name, text });
+      } else if (/\.(txt|md|markdown|csv|json|log)$/i.test(f.name) || f.type.startsWith('text/') || /json/.test(f.type)){
+        const text = await f.text();
+        pending.docs.push({ name:f.name, text: text.slice(0, 60000) });
+      } else {
+        toast(`Unsupported file: ${f.name} — try images, audio, PDF, or txt/md/csv/json`, 'error');
+      }
+    } catch (err){
+      toast(`Could not read ${f.name}: ${err.message || err}`, 'error');
+    }
+  }
+  renderAttachRow();
+  toggleSendBtn();
+}
+fileInput.addEventListener('change',()=>{
+  if (fileInput.files && fileInput.files.length) attachFiles(fileInput.files);
+  fileInput.value = '';
+});
+
+function renderAttachRow(){
+  const all = [
+    ...pending.images.map((a,i)=>({ kind:'images', i, html:`<img class="att-thumb" src="${a.thumb||a.dataUrl}" alt=""><span class="att-name">${escapeHtml(a.name)}</span>` })),
+    ...pending.audios.map((a,i)=>({ kind:'audios', i, html:`<span class="att-chip">🎙 ${escapeHtml(a.name)}</span>` })),
+    ...pending.docs.map((a,i)=>({ kind:'docs', i, html:`<span class="att-chip">📄 ${escapeHtml(a.name)}</span>` })),
+  ];
+  attachRow.hidden = all.length === 0;
+  attachRow.innerHTML = all.map(a=>`
+    <div class="attach-pill" data-kind="${a.kind}" data-i="${a.i}">
+      ${a.html}
+      <button class="att-x" title="Remove">✕</button>
+    </div>`).join('');
+  attachRow.querySelectorAll('.attach-pill').forEach(p=>{
+    p.querySelector('.att-x').addEventListener('click',(e)=>{
+      e.stopPropagation();
+      pending[p.dataset.kind].splice(Number(p.dataset.i),1);
+      renderAttachRow();
+      toggleSendBtn();
+    });
+  });
+}
+
+/* Paste images straight into the prompt, and drop files onto the composer. */
+promptEl.addEventListener('paste',(e)=>{
+  const files = e.clipboardData && e.clipboardData.files;
+  if (files && files.length){ e.preventDefault(); attachFiles(files); }
+});
+const composerInner = document.querySelector('.composer-inner');
+if (composerInner){
+  ['dragover','dragenter'].forEach(ev=>composerInner.addEventListener(ev,(e)=>{ e.preventDefault(); composerInner.classList.add('drag'); }));
+  ['dragleave','drop'].forEach(ev=>composerInner.addEventListener(ev,(e)=>{ e.preventDefault(); composerInner.classList.remove('drag'); }));
+  composerInner.addEventListener('drop',(e)=>{
+    const files = e.dataTransfer && e.dataTransfer.files;
+    if (files && files.length) attachFiles(files);
+  });
+}
+
+/* ---------- Voice dictation (Web Speech API — no download) ---------- */
+const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+let recog = null, dictating = false, dictBase = '';
+
+function toggleDictation(){
+  if (!SpeechRec){
+    toast('Voice input needs the Web Speech API — try Chrome or Edge. You can still attach an audio file to have it transcribed locally.', 'error');
+    return;
+  }
+  if (dictating){ stopDictation(); return; }
+  recog = new SpeechRec();
+  recog.continuous = true;
+  recog.interimResults = true;
+  recog.lang = navigator.language || 'en-US';
+  dictBase = promptEl.value ? promptEl.value.replace(/\s+$/,'') + ' ' : '';
+  recog.onresult = (e)=>{
+    let interim = '', fin = '';
+    for (let i = e.resultIndex; i < e.results.length; i++){
+      const r = e.results[i];
+      if (r.isFinal) fin += r[0].transcript;
+      else interim += r[0].transcript;
+    }
+    if (fin){
+      dictBase += fin + ' ';
+      promptEl.value = dictBase;
+    } else {
+      promptEl.value = dictBase + interim;
+    }
+    toggleSendBtn();
+    autosize();
+  };
+  recog.onerror = (e)=>{
+    if (e.error === 'not-allowed') toast('Microphone access was blocked — allow it in the browser address bar.', 'error');
+    stopDictation();
+  };
+  recog.onend = ()=>{ if (dictating) stopDictation(); };
+  try { recog.start(); dictating = true; }
+  catch { dictating = false; }
+  micChip.classList.toggle('recording', dictating);
+  micChip.querySelector('span').textContent = dictating ? 'Listening — tap to stop' : 'Voice';
+  promptEl.focus();
+}
+function stopDictation(){
+  dictating = false;
+  try { recog && recog.stop(); } catch {}
+  micChip.classList.remove('recording');
+  micChip.querySelector('span').textContent = 'Voice';
+  toggleSendBtn();
+  autosize();
+}
+micChip.addEventListener('click', toggleDictation);
+
+/* ---------- Local model manager panel ---------- */
+function openModelPanel(){ modelPanel.hidden = false; renderModelList(); }
+function closeModelPanel(){ modelPanel.hidden = true; }
+document.getElementById('modelPanelClose').addEventListener('click', closeModelPanel);
+document.addEventListener('mousedown',(e)=>{
+  // Ignore the mousedown that opened the panel from the ＋ menu (it bubbles
+  // up here and would otherwise close the panel immediately).
+  if (!modelPanel.hidden && !modelPanel.contains(e.target) && !plusMenu.contains(e.target) && !plusBtn.contains(e.target)) closeModelPanel();
+});
+
+function statusLine(s){
+  switch (s.state){
+    case 'ready':       return { txt:'✓ Downloaded — running locally', cls:'ok' };
+    case 'downloading': return { txt:`Downloading… ${s.percent||0}%`, cls:'dl' };
+    case 'loading':     return { txt:'Warming up on the GPU…', cls:'dl' };
+    case 'error':       return { txt:'Error — ' + (s.error || 'failed to load'), cls:'err' };
+    default:            return { txt:'Not downloaded' + (window.LocalAI && window.LocalAI.optedIn ? (window.LocalAI.optedIn(s._kind) ? ' · auto-loads on visit' : '') : ''), cls:'' };
+  }
+}
+
+function renderModelList(){
+  if (!window.LocalAI){ modelList.innerHTML = '<div class="mp-empty">Local models unavailable.</div>'; return; }
+  const defs = window.LocalAI.models();
+  const st = window.LocalAI.status();
+  const kinds = ['text','vision','stt'];
+  modelList.innerHTML = kinds.map(k=>{
+    const d = defs[k], s = Object.assign({ _kind:k }, st[k] || { state:'idle', percent:0 });
+    const sl = statusLine(s);
+    const busy = s.state === 'downloading' || s.state === 'loading';
+    const gpuNote = d.needsWebGPU && !window.LocalAI.canAttempt() ? `<div class="mp-gpu">⚠️ needs WebGPU (Chrome / Edge / Brave)</div>` : '';
+    const bar = s.state === 'downloading' ? `<div class="mp-bar"><div class="mp-fill" style="width:${s.percent||0}%"></div></div>` : '';
+    const btn = busy ? `<button class="mp-btn" disabled>…</button>`
+      : s.state === 'ready' ? `<button class="mp-btn subtle" data-unload="${k}">Unload</button>`
+      : `<button class="mp-btn" data-dl="${k}">Download</button>`;
+    return `<div class="mp-item">
+      <div class="mp-row">
+        <div class="mp-info">
+          <div class="mp-label">${escapeHtml(d.label)} <span class="mp-size">${d.sizeText}</span></div>
+          <div class="mp-blurb">${escapeHtml(d.blurb)}</div>
+          <div class="mp-status ${sl.cls}">${sl.txt}</div>
+          ${gpuNote}${bar}
+        </div>
+        ${btn}
+      </div>
+    </div>`;
+  }).join('');
+  modelList.querySelectorAll('[data-dl]').forEach(b=>{
+    b.addEventListener('click',()=>{
+      const k = b.dataset.dl;
+      window.LocalAI.setOptIn(k, true);
+      window.LocalAI.download(k).then(()=>{
+        toast(k === 'text' ? 'Research model ready — Auralis will now answer in your browser.' :
+              k === 'vision' ? 'Vision model ready — attach an image and ask about it.' :
+                               'Speech-to-text ready — attach an audio file to transcribe it.');
+      }).catch(err=>{
+        toast('Model download failed: ' + (err && err.message || err), 'error');
+      });
+      renderModelList();
+    });
+  });
+  modelList.querySelectorAll('[data-unload]').forEach(b=>{
+    b.addEventListener('click',()=>{
+      window.LocalAI.unload(b.dataset.unload);
+      renderModelList();
+      updateProviderStatus();
+    });
+  });
+}
+
+
 function boot(){
   loadState();
+  // Warm up any local models the user previously opted into (cached after
+  // the first download). Nothing downloads until the user asks via the
+  // ＋ Tools → Local models panel; the server model covers the rest.
+  if (window.LocalAI){
+    window.LocalAI.warmup();
+    window.LocalAI.onStatus(()=>{ updateProviderStatus(); });
+  }
   updateProviderStatus();
   webToggle.classList.toggle('active', state.settings.web);
   deepToggle.classList.toggle('active', state.settings.deep);
+  // Voice dictation shortcut chip (also available inside the ＋ menu).
+  if (SpeechRec) micChip.classList.remove('hidden');
   if (state.chats.length===0){
     state.chats.push({ id:uid(), title:'New research', createdAt:Date.now(), updatedAt:Date.now(), messages:[] });
   }

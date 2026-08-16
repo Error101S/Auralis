@@ -7,12 +7,14 @@ import { fileURLToPath } from 'url';
 import session from 'express-session';
 import passport from 'passport';
 import { Strategy as GoogleStrategy } from 'passport-google-oauth20';
-import { findOrCreateUser, getUserById, updateUserApiKey, getMemories, addMemory, deleteMemories, logMessage, getRecentChat, SqliteSessionStore } from './database.js';
+import { findOrCreateUser, getUserById, getMemories, addMemory, deleteMemories, logMessage, getRecentChat, SqliteSessionStore } from './database.js';
 import { detectIntent, casualReply, solveCalculation, creativeReply, expandQuery, systemReply, memoryCommand, extractFacts } from './intent.js';
 import { Readability } from '@mozilla/readability';
 import { parseHTML } from 'linkedom';
 import TurndownService from 'turndown';
 import pLimit from 'p-limit';
+
+import { localGenerate, RESEARCH_SYSTEM, LOCAL_MODEL } from './local-ai.js';
 
 dotenv.config();
 
@@ -66,11 +68,11 @@ async function fetchPageText(url) {
     }
 }
 
-async function enrichSources(searchResults) {
+async function enrichSources(searchResults, { limit: maxSources = 4 } = {}) {
     // Only enrich real web URLs; skip placeholders (example.com) entirely.
     const realIdxs = [];
     searchResults.forEach((s, i) => {
-        if (s.url && !/^https?:\/\/(example\.com|localhost)/i.test(s.url) && i < 4) realIdxs.push(i);
+        if (s.url && !/^https?:\/\/(example\.com|localhost)/i.test(s.url) && i < maxSources) realIdxs.push(i);
     });
     if (realIdxs.length === 0) return searchResults;
     const limit = pLimit(3);
@@ -200,8 +202,7 @@ app.get('/api/user', (req, res) => {
             user: {
                 name: req.user.name,
                 email: req.user.email,
-                avatar_url: req.user.avatar_url,
-                has_api_key: !!req.user.gemini_api_key
+                avatar_url: req.user.avatar_url
             }
         });
     } else {
@@ -210,20 +211,25 @@ app.get('/api/user', (req, res) => {
 });
 
 app.post('/api/user/settings', async (req, res) => {
-    if (!req.isAuthenticated()) {
-        return res.status(401).json({ error: 'Unauthorized' });
-    }
-    const { apiKey } = req.body;
-    try {
-        await updateUserApiKey(req.user.id, apiKey);
-        res.json({ success: true });
-    } catch (err) {
-        res.status(500).json({ error: 'Failed to save settings' });
-    }
+    // Retired: Gemini is no longer used; there is nothing meaningful to save.
+    res.status(410).json({ error: 'No longer supported — Auralis now uses a local model.' });
 });
 
 // Serve static files from the public directory
 app.use(express.static(path.join(__dirname, 'public')));
+
+// Serve Local-Browser-AI's @huggingface/transformers web bundle so the browser
+// can also run the LFM research model locally (hybrid path; server-only path
+// needs none of this).
+app.use('/vendor/transformers', express.static(
+    path.join(__dirname, 'node_modules', '@huggingface', 'transformers', 'dist'),
+    {
+        setHeaders: (res) => {
+            res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+            res.setHeader('Cache-Control', 'public, max-age=3600');
+        },
+    }
+));
 
 // SPA fallback: serve index.html for any remaining GET (Express 5 compatible).
 // /api endpoints are never captured here.
@@ -234,111 +240,16 @@ app.use((req, res, next) => {
     next();
 });
 
-// Free-tier Gemini model preference (highest free limits first).
-// Order: 3.1-flash-lite (500 RPD), 3.5-flash-lite (500 RPD), 3.6-flash, 3-flash, 2.5-flash-lite.
-const GEMINI_MODEL_FALLBACKS = [
-    'gemini-3.1-flash-lite',
-    'gemini-3.5-flash-lite',
-    'gemini-3.6-flash',
-    'gemini-3-flash',
-    'gemini-2.5-flash-lite',
-];
-const MODEL_OVERRIDE = process.env.GEMINI_MODEL || '';
-// Detect "no longer available" / deprecated style errors so we can retry that model.
-const DEPRECATED_RE = /no longer available|not found|not supported|deprecat/i;
-// Detect rate-limit / quota errors so we can rotate off that model temporarily.
-const RATE_LIMIT_RE = /rate\s*limit|quota|resource.*exhaust|too many|429/i;
-
-// In-memory model rotation state: marks models that ran out, with a cooldown
-// timestamp after which they become candidates again.
-const modelCooldown = new Map(); // model -> epoch ms when it can be retried
-const MODEL_COOLDOWN_MS = 60 * 1000; // 1 minute before retrying an exhausted model
-let preferredModel = MODEL_OVERRIDE || GEMINI_MODEL_FALLBACKS[0];
-
-function availableModels() {
-    const now = Date.now();
-    const cooled = [];
-    for (const m of GEMINI_MODEL_FALLBACKS) {
-        const until = modelCooldown.get(m) || 0;
-        if (until <= now) cooled.push(m);
-    }
-    return cooled;
-}
-
-function markExhausted(model) {
-    modelCooldown.set(model, Date.now() + MODEL_COOLDOWN_MS);
-}
-
-async function geminiGenerate(apiKey, prompt, { timeout = 20000 } = {}) {
-    // Build the candidate queue: preferred model first, then the rest by fallback order.
-    // If the preferred model is currently cooled-down, skip ahead to the next available one.
-    const pool = availableModels();
-    // If preferred isn't available, pick the first available as the new preferred.
-    if (!pool.includes(preferredModel)) {
-        preferredModel = MODEL_OVERRIDE && pool.includes(MODEL_OVERRIDE)
-            ? MODEL_OVERRIDE
-            : pool[0] || GEMINI_MODEL_FALLBACKS.find(m => !modelCooldown.has(m)) || GEMINI_MODEL_FALLBACKS[0];
-    }
-    const queue = [preferredModel];
-    for (const m of pool) if (!queue.includes(m)) queue.push(m);
-    // Add any fully-cooled models at the tail as last resort.
-    for (const m of GEMINI_MODEL_FALLBACKS) if (!queue.includes(m)) queue.push(m);
-
-    const tried = new Set();
-    for (const model of queue) {
-        if (tried.has(model)) continue;
-        tried.add(model);
-        try {
-            const ctrl = new AbortController();
-            const timer = setTimeout(() => ctrl.abort(), timeout);
-            const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: prompt }] }] }),
-                signal: ctrl.signal,
-            });
-            clearTimeout(timer);
-            if (r.ok) {
-                const data = await r.json();
-                const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-                // Success: make this the sticky preferred model.
-                preferredModel = model;
-                modelCooldown.delete(model);
-                return { ok: true, model, text };
-            }
-            let errBody;
-            try { errBody = await r.json(); } catch { errBody = null; }
-            const msg = errBody?.error?.message || r.statusText;
-            const status = r.status;
-            // Deprecated/unavailable model -> skip to next, don't cool (it's never coming back today).
-            if (status === 404 || (status === 400 && DEPRECATED_RE.test(msg))) {
-                continue;
-            }
-            // Rate limit / quota -> rotate off this model and try the next one.
-            if (status === 429 || (status === 400 && RATE_LIMIT_RE.test(msg))) {
-                markExhausted(model);
-                continue;
-            }
-            // Invalid key / bad request (non-deprecated) -> a real, non-rotatable error.
-            if (status === 400 || status === 401 || status === 403) {
-                return { ok: false, model, status, error: msg };
-            }
-            // Server-side hiccup -> try next model once.
-            continue;
-        } catch (e) {
-            if (e.name === 'AbortError' || /fetch|network/i.test(e.message)) {
-                continue;
-            }
-            return { ok: false, model, error: e.message };
-        }
-    }
-    return { ok: false, model: null, error: 'All candidate Gemini models were unavailable or rate-limited. Wait a moment and try again.' };
-}
+// ---------------------------------------------------------------------------
+// Local inference replaces Gemini. Auralis now synthesizes grounded answers
+// with the open LFM 2.5 1.2B "Thinking" research model running locally in
+// Node (see local-ai.js). No Gemini SDK, no API keys, no external model calls.
+// ---------------------------------------------------------------------------
 
 
 // Fallback search placeholder (kept only as the absolute last resort so the
 // frontend still gets a clickable Sources list; NEVER injected into the
-// Gemini prompt — see the no-results / system-query guards in /api/search).
+// local model prompt — see the no-results / system-query guards in /api/search).
 const mockSources = (query) => {
     return [
         { title: 'Understanding ' + query, url: 'https://example.com/1', snip: 'An in-depth look at ' + query },
@@ -391,8 +302,8 @@ const INTENTS = [
 ];
 function intentOf(q){ for (const it of INTENTS) if (it.re.test(q)) return it.key; return 'explain'; }
 
-// Lightweight built-in synthesis used when no Gemini key is configured and the
-// server has no key either. It builds a clean answer from the live search
+// Lightweight built-in synthesis used as a last-resort fallback when the local
+// LFM model cannot be loaded. It builds a clean answer from the live search
 // sources (if any) WITHOUT narrating tool internals or forcing research
 // headings onto the reply.
 function localSynthesize(query, sources){
@@ -419,71 +330,32 @@ function localSynthesize(query, sources){
     return out;
 }
 
-async function validateGeminiKey(key) {
-    try {
-        const ctrl = new AbortController();
-        const timer = setTimeout(() => ctrl.abort(), 8000);
-        const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${preferredModel}:generateContent?key=${key}`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: 'Reply with OK' }] }] })
-        });
-        clearTimeout(timer);
-        if (r.ok) return { ok: true, status: 200 };
-        let msg;
-        try { msg = (await r.json())?.error?.message || ''; } catch { msg = ''; }
-        // A deprecated-model error means the KEY itself is valid (the account works).
-        const deprecated = r.status === 404 || (r.status === 400 && DEPRECATED_RE.test(msg));
-        if (deprecated) return { ok: true, status: 200 };
-        return { ok: false, status: r.status };
-    } catch {
-        return { ok: false, status: 0 };
-    }
-}
-
-app.post('/api/gemini-key', async (req, res) => {
-    const { apiKey } = req.body;
-    if (!apiKey || typeof apiKey !== 'string' || !apiKey.trim()) {
-        return res.status(400).json({ error: 'apiKey is required' });
-    }
-    // Save to the signed-in user's account if logged in
-    if (req.isAuthenticated()) {
-        try {
-            await updateUserApiKey(req.user.id, apiKey.trim());
-        } catch (err) {
-            return res.status(500).json({ error: 'Failed to save to your account' });
-        }
-    }
-    // Verify the key against the Gemini API
-    const check = await validateGeminiKey(apiKey.trim());
-    if (check.status === 400 || check.status === 401 || check.status === 403) {
-        return res.status(400).json({ error: 'Invalid Gemini API key — Gemini rejected it.' });
-    }
-    if (!check.ok) {
-        // Network error: can't verify, but still accept the key.
-        return res.json({ success: true, verified: false });
-    }
-    res.json({ success: true, verified: true });
-});
-
 app.post('/api/search', async (req, res) => {
-    const { query, apiKey: apiKeyFromBody, history, memoryId } = req.body;
+    const { query, history, memoryId } = req.body;
     if (!query || typeof query !== 'string' || !query.trim()) {
         return res.status(400).json({ error: 'Query is required' });
     }
     const trimmed = query.trim();
 
     try {
-        // Resolve the API key up front (client > logged-in user > server env)
-        // so intent dispatch can choose the direct-Gemini vs. search path.
-        let apiKey = apiKeyFromBody;
-        if (!apiKey && req.isAuthenticated() && req.user.gemini_api_key) {
-            apiKey = req.user.gemini_api_key;
-        }
-        if (!apiKey && process.env.GEMINI_API_KEY) {
-            apiKey = process.env.GEMINI_API_KEY;
-        }
-        if (typeof apiKey === 'string') apiKey = apiKey.trim();
+        // Hybrid routing: when the client signals it will synthesize the answer
+        // locally (with the LFM model running in the browser via WebGPU), we
+        // skip server-side synthesis and return enriched sources (+ page content)
+        // so the browser can reason over them. Otherwise the server synthesizes
+        // with the local LFM model (see local-ai.js).
+        const browserSynthesis = req.body?.browserSynthesis === true;
+
+        // Client options: web=false skips the live search entirely (answer from
+        // model knowledge + any attachment), deep=true widens the search and
+        // fetches full content for more sources.
+        const web = req.body?.web !== false;
+        const deep = req.body?.deep === true;
+
+        // Attachment context sent by the client (transcript, extracted
+        // document text, or a local vision-model analysis of an image).
+        const attachment = (req.body?.attachment && typeof req.body.attachment.text === 'string')
+            ? { name: String(req.body.attachment.name || 'attachment').slice(0, 200), text: req.body.attachment.text.slice(0, 12000) }
+            : null;
 
         // Persistent memory owner: account when signed in, otherwise the
         // per-device anonymous id the client sends (or the session as a
@@ -559,8 +431,9 @@ app.post('/api/search', async (req, res) => {
         const intent = detectIntent(trimmed, history);
 
         // 1a. Casual chatter (hello, thanks, cool…): conversational reply,
-        // no search, no sources, no research framing.
-        if (intent === 'casual') {
+        // no search, no sources, no research framing. (Never triggered when
+        // the user attached material — that always goes to the model.)
+        if (intent === 'casual' && !attachment) {
             return res.json({ sources: [], text: casualReply(trimmed), model: 'auralis-local' });
         }
 
@@ -573,86 +446,72 @@ app.post('/api/search', async (req, res) => {
             // Solver said no (odd phrasing) — fall through to research.
         }
 
-        // 1c. Creative requests: never search. Gemini writes it when a key is
-        // present; otherwise a built-in response (honest about its limits).
+        // 1c. Creative requests: never search. The local LFM model writes it; a
+        // built-in response (honest about its limits) is the fallback.
         if (intent === 'creative') {
-            if (apiKey) {
+            try {
                 const promptText = `You are Auralis, a creative writing assistant. The user wants something created, not researched.\n\nToday is ${today}.\n\n${convSection}${memSection}User's request: "${trimmed}"\n\nWrite exactly what they asked for, in the format, length, and tone they requested. Just deliver the creative work — no citations, no sources, no research framing, no explanations of what you did, no follow-up questions.`;
-                try {
-                    const result = await geminiGenerate(apiKey, promptText);
-                    return res.json({
-                        sources: [],
-                        text: result.ok ? (result.text || '') : `⚠️ Gemini API Error: ${result.error || 'unknown error'}`,
-                        model: result.ok ? (result.model || '') : '',
-                    });
-                } catch (err) {
-                    console.error("Gemini fetch error:", err);
-                    return res.json({ sources: [], text: `⚠️ Gemini API Error: ${err.message}`, model: '' });
+                const result = await localGenerate({ userPrompt: promptText });
+                if (result.text) {
+                    return res.json({ sources: [], text: result.text, model: LOCAL_MODEL.name });
                 }
+            } catch (err) {
+                console.error('Local model error (creative):', err.message);
             }
             return res.json({ sources: [], text: creativeReply(trimmed), model: 'auralis-local' });
         }
 
-        // 1d. Simple knowledge questions WITH Gemini: answer directly from the
-        // model's own knowledge — no search, no sources. (Without a key these
-        // fall through to the search pipeline, since local synthesis needs
-        // source material.)
-        if (intent === 'knowledge' && apiKey) {
-            const promptText = `You are Auralis, a knowledgeable research assistant. Answer the user's question directly from your own knowledge — no web search, no sources, no citations.\n\nToday is ${today}.\n\n${convSection}${memSection}User's question: "${trimmed}"\n\nAnswer accurately and concisely, matching length to the question. If the question concerns very recent events, prices, or fast-changing data that you can't know reliably, say so plainly and offer to search the live web instead. If you don't know, say you don't know — never guess. No citations, no source list, no research framing.`;
-            try {
-                const result = await geminiGenerate(apiKey, promptText);
-                return res.json({
-                    sources: [],
-                    text: result.ok ? (result.text || '') : `⚠️ Gemini API Error: ${result.error || 'unknown error'}`,
-                    model: result.ok ? (result.model || '') : '',
-                });
-            } catch (err) {
-                console.error("Gemini fetch error:", err);
-                return res.json({ sources: [], text: `⚠️ Gemini API Error: ${err.message}`, model: '' });
-            }
-        }
+        // (No separate "knowledge" branch any more: simple factual questions flow
+        // into the grounded research pipeline below, which searches the live web
+        // and synthesizes a cited answer with the local LFM research model.)
 
         // 2. Research path: current events, research requests, knowledge
         // without a key, and follow-ups. Perform web search using
         // duck-duck-scrape, with a robust HTML fallback. Short follow-ups get
         // their earlier context glued on so the search finds the right pages.
+        // When the user switched the web off (＋ Tools), skip searching and let
+        // the model answer from its own knowledge (+ any attachment).
         const searchQuery = expandQuery(trimmed, history);
         let synthesizedText = "I couldn't generate a response.";
         let modelUsed = '';
         let searchResults = [];
-        try {
-            const results = await search(searchQuery, { safeSearch: SafeSearchType.MODERATE });
-            searchResults = results.results.slice(0, 5).map(r => ({
-                title: r.title,
-                url: r.url,
-                snip: r.description
-            }));
-        } catch (searchErr) {
-            console.error('duck-duck-scrape failed:', searchErr.message);
-        }
-        if (searchResults.length === 0) {
-            console.log('Falling back to DDG HTML endpoint...');
-            const fb = await ddgHtmlSearch(searchQuery);
-            if (fb.length > 0) searchResults = fb.slice(0, 5);
-            console.log(`DDG HTML returned ${searchResults.length} results`);
-        }
-        // NOTE: do NOT fill in mockSources as a substitute for real results —
-        // an honest empty sources list is better than fake example.com entries.
-        // enrichSources() already skips placeholder URLs, so real results get
-        // fetched live; if nothing came back, we leave sources empty.
+        if (web) {
+            try {
+                const results = await search(searchQuery, { safeSearch: SafeSearchType.MODERATE });
+                searchResults = results.results.slice(0, deep ? 8 : 5).map(r => ({
+                    title: r.title,
+                    url: r.url,
+                    snip: r.description
+                }));
+            } catch (searchErr) {
+                console.error('duck-duck-scrape failed:', searchErr.message);
+            }
+            if (searchResults.length === 0) {
+                console.log('Falling back to DDG HTML endpoint...');
+                const fb = await ddgHtmlSearch(searchQuery, { limit: deep ? 8 : 6 });
+                if (fb.length > 0) searchResults = fb.slice(0, deep ? 8 : 5);
+                console.log(`DDG HTML returned ${searchResults.length} results`);
+            }
+            // NOTE: do NOT fill in mockSources as a substitute for real results —
+            // an honest empty sources list is better than fake example.com entries.
 
-        // 2b. Fetch live page content so Gemini answers from CURRENT data.
-        if (searchResults.length > 0) {
-            searchResults = await enrichSources(searchResults);
+            // 2b. Fetch live page content so answers come from CURRENT data.
+            // Deep mode fetches full content for more sources.
+            if (searchResults.length > 0) {
+                searchResults = await enrichSources(searchResults, { limit: deep ? 6 : 4 });
+            }
         }
 
-        if (!apiKey) {
-            // No Gemini key anywhere — fall back to Auralis's built-in synthesizer
-            // (summarizes the live search results without leaking tool internals,
-            // and is honest when there are no results at all).
-            synthesizedText = localSynthesize(trimmed, searchResults);
-            modelUsed = 'auralis-local';
-        } else {
+        // 3. Hybrid synthesis. Browser-first: if the client is running the LFM
+        // model locally (WebGPU), hand it the enriched sources (with page text)
+        // and let it reason over them in the browser. Otherwise the server
+        // synthesizes with the local LFM research model below.
+        if (browserSynthesis) {
+            return res.json({ sources: searchResults, text: null, mode: 'browser', model: LOCAL_MODEL.name });
+        }
+
+        // Server path — synthesize with the local LFM research model (no Gemini).
+        {
             // Only include REAL sources in the prompt. Never inject placeholders.
             // Each entry visibly marks whether it carries full page content
             // (strong grounding) or only a search snippet (weak grounding), so
@@ -666,13 +525,22 @@ app.post('/api/search', async (req, res) => {
                     return `[${i+1}] ${s.title}\nURL: ${s.url}\n${body}`;
                   }).join('\n\n')
                 : '(No live web results were returned by the search provider for this query.)';
+            // Attachment material (document text, voice-note transcript, or a
+            // local vision-model analysis of an attached image). Trusted as
+            // primary user-supplied material — never cited like a web source.
+            const attachSection = attachment
+                ? `ATTACHED MATERIAL "${attachment.name}" (supplied by the user — trustworthy primary material about their question; use it freely, but do not cite it like a numbered web source):\n${attachment.text}\n\n`
+                : '';
+            const noWebNote = !web
+                ? `WEB SEARCH IS SWITCHED OFF for this turn — answer from your own knowledge${attachment ? ' together with the attached material' : ''}. Do not invent citations and do not reference numbered sources.\n\n`
+                : '';
             const promptText = `You are Auralis, a web research assistant. The live web search has already been done for you and the gathered material is below — your job is to answer the user's question like a careful research analyst. Never describe the search, the sources section, or any tooling; the research happened silently.
 
 Today is ${today}.
 
 User's question: "${trimmed}"
 
-${convSection}${memSection}REFERENCE MATERIAL (numbered sources [1] through [${searchResults.length || 0}]; title + URL + evidence, for your use only — never describe this section or its inner workings):
+${convSection}${memSection}${noWebNote}${attachSection}REFERENCE MATERIAL (numbered sources [1] through [${searchResults.length || 0}]; title + URL + evidence, for your use only — never describe this section or its inner workings):
 ${sourcesText}
 
 Use the conversation context above (if any) only to understand what the user is asking now — never cite it, and don't repeat earlier answers unless the user asks for a recap.
@@ -711,16 +579,18 @@ ANSWER QUALITY RULES — follow every rule that applies:
 GREETINGS & SMALL TALK EXCEPTION: If the user's question is a simple greeting, small talk, or basic chatter (not a research request), respond warmly and concisely in 1–2 sentences. No citations, no analysis of the term itself, no research framing.`;
 
             try {
-                const result = await geminiGenerate(apiKey, promptText);
-                if (result.ok) {
+                const result = await localGenerate({ userPrompt: promptText });
+                if (result.text) {
                     synthesizedText = result.text || "No response generated.";
-                    modelUsed = result.model || '';
+                    modelUsed = LOCAL_MODEL.name;
                 } else {
-                    synthesizedText = `⚠️ Gemini API Error: ${result.error || 'unknown error'}`;
+                    synthesizedText = localSynthesize(trimmed, searchResults);
+                    modelUsed = 'auralis-local';
                 }
             } catch (err) {
-                console.error("Gemini fetch error:", err);
-                synthesizedText = `⚠️ Gemini API Error: ${err.message}`;
+                console.error('Local model error (research):', err.message);
+                synthesizedText = localSynthesize(trimmed, searchResults);
+                modelUsed = 'auralis-local';
             }
         }
 
