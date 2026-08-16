@@ -240,10 +240,14 @@ async function fetchPageText(url) {
             text = String(body).replace(/\s+/g, ' ').trim();
         }
         if (!text) return null;
-        // Drop markdown images (![](url)) from page text: models were copying
-        // them into answers as mangled markdown. Links stay; pictures don't
-        // belong in the model's reading material.
-        text = text.replace(/!\[[^\]]*\]\([^)]*\)/g, '').replace(/\n{3,}/g, '\n\n');
+        // Plain text only: markdown images are dropped and markdown links are
+        // reduced to their label text. Models were parroting raw markdown
+        // (![](url "title"), [Thumbnail](...), _italics_) into answers; the
+        // numbered source list already carries the URLs for citations.
+        text = text
+            .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
+            .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+            .replace(/\n{3,}/g, '\n\n');
         return text.slice(0, PAGE_MAX_CHARS);
     } catch {
         return null;
@@ -318,6 +322,90 @@ async function ddgHtmlSearch(query, { limit = 6 } = {}) {
         return out;
     } catch {
         return [];
+    }
+}
+
+// Third search fallback: DuckDuckGo Lite (GET, different endpoint, different
+// rate-limit bucket than the HTML one).
+async function ddgLiteSearch(query, { limit = 6 } = {}) {
+    try {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 10000);
+        const r = await fetch('https://lite.duckduckgo.com/lite/?q=' + encodeURIComponent(query), {
+            signal: ctrl.signal,
+            headers: {
+                'User-Agent': DDG_UA,
+                'Accept': 'text/html',
+                'Accept-Language': 'en-US,en;q=0.9',
+            },
+            redirect: 'follow',
+        });
+        clearTimeout(timer);
+        if (!r.ok) return [];
+        const html = await r.text();
+        if (!html || html.length < 300) return [];
+        const { document } = parseHTML(html);
+        const out = [];
+        const seen = new Set();
+        for (const a of document.querySelectorAll('a.result-link')) {
+            let href = a.getAttribute('href') || '';
+            const m = href.match(/[?&]uddg=([^&]+)/);
+            if (m) { try { href = decodeURIComponent(m[1]); } catch {} }
+            if (!/^https?:\/\//.test(href) || seen.has(href)) continue;
+            seen.add(href);
+            const row = a.closest('tr');
+            const snip = (row && row.nextElementSibling && row.nextElementSibling.querySelector)
+                ? (row.nextElementSibling.querySelector('.result-snippet') || {}).textContent || ''
+                : '';
+            out.push({
+                title: (a.textContent || '').replace(/\s+/g, ' ').trim(),
+                url: href,
+                snip: String(snip).replace(/\s+/g, ' ').trim(),
+            });
+            if (out.length >= limit) break;
+        }
+        return out;
+    } catch {
+        return [];
+    }
+}
+
+// Wikipedia knowledge fallback — free, no key, no aggressive rate limits.
+// Covers "what/who is X" questions (people, memes, events, series) that the
+// local model's training data may not know and web search may have missed.
+// Returns a source-shaped {title,url,snip,body}.
+async function wikipediaLookup(query) {
+    try {
+        const api = 'https://en.wikipedia.org/w/api.php';
+        const headers = { 'User-Agent': 'Auralis/1.0 (research assistant)' };
+        const srCtrl = new AbortController();
+        const srTimer = setTimeout(() => srCtrl.abort(), 6000);
+        const sr = await fetch(`${api}?action=query&list=search&srsearch=${encodeURIComponent(query)}&srlimit=3&format=json&origin=*`, { headers, signal: srCtrl.signal });
+        clearTimeout(srTimer);
+        if (!sr.ok) return null;
+        const sj = await sr.json();
+        const hits = (sj?.query?.search || []).filter(h => h && h.title);
+        if (!hits.length) return null;
+        const title = hits[0].title;
+        const prCtrl = new AbortController();
+        const prTimer = setTimeout(() => prCtrl.abort(), 6000);
+        const pr = await fetch(`${api}?action=query&prop=extracts|info&exintro=1&explaintext=1&inprop=url&redirects=1&titles=${encodeURIComponent(title)}&format=json&origin=*`, { headers, signal: prCtrl.signal });
+        clearTimeout(prTimer);
+        if (!pr.ok) return null;
+        const pj = await pr.json();
+        const pages = pj?.query?.pages || {};
+        const page = Object.values(pages)[0];
+        if (!page || page.missing !== undefined) return null;
+        const extract = String(page.extract || '').trim();
+        if (extract.length < 60) return null;
+        return {
+            title: page.title || title,
+            url: page.fullurl || ('https://en.wikipedia.org/wiki/' + encodeURIComponent(String(page.title || title).replace(/ /g, '_'))),
+            snip: 'Wikipedia',
+            body: extract.slice(0, 2000),
+        };
+    } catch {
+        return null;
     }
 }
 
@@ -527,13 +615,21 @@ function isSimpleLookup(q){
 }
 
 // Short honest fallback built from the best snippet, used when a model
-// doesn't produce a clean answer for a simple question.
+// doesn't produce a clean answer for a simple question. Complete sentences
+// only — never a mid-word cut.
 function briefFallback(sources){
     const s = (sources || []).find(x => (x.body || x.snip || '').trim().length > 40) || (sources || [])[0];
-    if (!s) return "I couldn't find a quick answer for that — try rephrasing? 🤔";
+    if (!s) return "I couldn't reach the web just now and my offline knowledge doesn't cover that — try again in a moment? 🤔";
     const text = String(s.body || s.snip || '').replace(/\s+/g, ' ').trim();
-    const sentences = text.split(/(?<=[.!?])\s+/);
-    return sentences.slice(0, 2).join(' ').slice(0, 280) + ' [1]';
+    const sentences = text.split(/(?<=[.!?])\s+/).filter(Boolean);
+    let out = '';
+    for (const sent of sentences) {
+        if (out && (out + ' ' + sent).length > 520) break;
+        out = out ? out + ' ' + sent : sent;
+        if (out.length >= 520) break;
+    }
+    if (!out) out = text.slice(0, 300).replace(/\s+\S*$/, '');
+    return out + ' [1]';
 }
 
 // Lightweight built-in synthesis used as a last-resort fallback when the local
@@ -803,6 +899,12 @@ app.post('/api/search', async (req, res) => {
                 if (fb.length > 0) searchResults = fb.slice(0, deep ? 10 : 6);
                 console.log(`DDG HTML returned ${searchResults.length} results`);
             }
+            if (searchResults.length === 0) {
+                console.log('Falling back to DDG Lite endpoint...');
+                const fb = await ddgLiteSearch(searchQuery, { limit: deep ? 10 : 8 });
+                if (fb.length > 0) searchResults = fb.slice(0, deep ? 10 : 6);
+                console.log(`DDG Lite returned ${searchResults.length} results`);
+            }
             // NOTE: do NOT fill in mockSources as a substitute for real results —
             // an honest empty sources list is better than fake example.com entries.
 
@@ -818,6 +920,18 @@ app.post('/api/search', async (req, res) => {
                         else sendLog(`Couldn't read ${hostOf(ev.url)} — falling back to its snippet`);
                     }
                 });
+            }
+        }
+        // Last knowledge fallback: when the web comes up empty and the
+        // question is a "what/who is X" lookup, ask Wikipedia — it covers
+        // people, series, memes and recent events the local model's training
+        // data may not know (and DDG rate-limit blips don't touch it).
+        if (web && searchResults.length === 0 && linkSources.length === 0 && isSimpleLookup(trimmed)) {
+            sendLog('Search came up empty — checking Wikipedia 📚');
+            const wiki = await wikipediaLookup(searchBase || trimmed);
+            if (wiki){
+                searchResults = [wiki];
+                sendLog(`Found it — ${wiki.title} (Wikipedia)`);
             }
         }
         // Pages the user explicitly linked come first — they're primary.
@@ -840,7 +954,7 @@ app.post('/api/search', async (req, res) => {
                 `[${i + 1}] ${s.title} (${hostOf(s.url)}): ${String(s.body || s.snip || '').replace(/\s+/g, ' ').trim().slice(0, 420)}`
             ).join('\n');
             const lightPrompt = `Today is ${today}.\n\n${memSection}The user asked: "${trimmed}"\n\nReference snippets (numbered; cite like [1] only when a snippet supports what you say):\n${briefSources || '(none found)'}`;
-            const lightSystem = 'You are Auralis, a friendly research assistant. Answer simple questions in 1–3 short, plain sentences — like a quick chat reply, not a report. Deliberate briefly (a couple of short thoughts at most) and then answer right away. No headings, no bullet lists, no filler. Plain text only: never include markdown images or links in your answer. One fitting emoji is fine. If the snippets don\'t answer it, say so honestly in one sentence. Never mention snippets, searches, or tools.';
+            const lightSystem = 'You are Auralis, a friendly research assistant. Answer simple questions with a short, chat-style reply: lead with the direct answer in one sentence, then add the most interesting SPECIFICS from the snippets — who created it, what it is about, why it is notable (2–4 sentences total). Deliberate briefly (a couple of short thoughts at most) and then answer right away. No headings, no bullet lists, no filler. Plain text only: never include markdown images or links in your answer. One fitting emoji is fine. If the snippets don\'t answer it, say so honestly in one sentence. Never mention snippets, searches, or tools.';
             let lightText = '';
             if (geminiKey) {
                 try {
@@ -854,7 +968,7 @@ app.post('/api/search', async (req, res) => {
             if (!lightText) {
                 try {
                     sendLog('The local model is writing a quick answer…');
-                    const r = await localGenerate({ system: lightSystem, userPrompt: lightPrompt + customInstructions, maxTokens: 800, onToken: onStreamToken });
+                    const r = await localGenerate({ system: lightSystem, userPrompt: lightPrompt + customInstructions, maxTokens: 1100, onToken: onStreamToken });
                     lightText = r.text || '';
                 } catch (err) {
                     console.error('Local model (quick answer) failed:', err.message);
