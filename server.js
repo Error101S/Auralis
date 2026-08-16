@@ -466,6 +466,27 @@ const INTENTS = [
 ];
 function intentOf(q){ for (const it of INTENTS) if (it.re.test(q)) return it.key; return 'explain'; }
 
+// Simple lookups ("who is X?", "what is Y?") deserve a chat-style answer:
+// 1–3 friendly sentences with a citation — not a full research report. The
+// heavy research prompt makes small models ramble through meta-reasoning.
+function isSimpleLookup(q){
+    const t = String(q || '').trim();
+    if (t.length > 75) return false;
+    if (/^\s*(who|what|when|where|which)\s+(is|are|was|were|does|do|did)\b/i.test(t)) return true;
+    if (/^\s*(who|what)'s\b/i.test(t)) return true;
+    return false;
+}
+
+// Short honest fallback built from the best snippet, used when a model
+// doesn't produce a clean answer for a simple question.
+function briefFallback(sources){
+    const s = (sources || []).find(x => (x.body || x.snip || '').trim().length > 40) || (sources || [])[0];
+    if (!s) return "I couldn't find a quick answer for that — try rephrasing? 🤔";
+    const text = String(s.body || s.snip || '').replace(/\s+/g, ' ').trim();
+    const sentences = text.split(/(?<=[.!?])\s+/);
+    return sentences.slice(0, 2).join(' ').slice(0, 280) + ' [1]';
+}
+
 // Lightweight built-in synthesis used as a last-resort fallback when the local
 // LFM model cannot be loaded. It builds a clean answer from the live search
 // sources (if any) WITHOUT narrating tool internals or forcing research
@@ -746,9 +767,41 @@ app.post('/api/search', async (req, res) => {
         // model locally (WebGPU), hand it the enriched sources (with page text)
         // and let it reason over them in the browser. Otherwise the server
         // synthesizes with Gemini (when keyed) or the local LFM model.
-        if (browserSynthesis) {
+        // Simple lookups skip the browser hand-off: they want the server's
+        // light quick-answer path instead of a full research prompt.
+        if (browserSynthesis && !isSimpleLookup(trimmed)) {
             sendLog('Handing everything to the model in your browser…');
             return sendResult({ sources: searchResults, text: null, mode: 'browser', model: LOCAL_MODEL.name });
+        }
+
+        // 3a. Simple lookup → chat-style brief answer (1–3 sentences).
+        if (isSimpleLookup(trimmed)) {
+            const briefSources = searchResults.slice(0, 3).map((s, i) =>
+                `[${i + 1}] ${s.title} (${hostOf(s.url)}): ${String(s.body || s.snip || '').replace(/\s+/g, ' ').trim().slice(0, 420)}`
+            ).join('\n');
+            const lightPrompt = `Today is ${today}.\n\n${memSection}The user asked: "${trimmed}"\n\nReference snippets (numbered; cite like [1] only when a snippet supports what you say):\n${briefSources || '(none found)'}`;
+            const lightSystem = 'You are Auralis, a friendly research assistant. Answer simple questions in 1–3 short, plain sentences — like a quick chat reply, not a report. No headings, no bullet lists, no filler. One fitting emoji is fine. If the snippets don\'t answer it, say so honestly in one sentence. Never mention snippets, searches, or tools.';
+            let lightText = '';
+            if (geminiKey) {
+                try {
+                    sendLog('Gemini is writing a quick answer… ✨');
+                    lightText = await geminiGenerate({ apiKey: geminiKey, system: lightSystem, userPrompt: lightPrompt + customInstructions, maxTokens: 300 });
+                } catch (err) {
+                    console.error('Gemini (quick answer) failed:', err.message);
+                    sendLog('Gemini hiccuped — switching to the local model…');
+                }
+            }
+            if (!lightText) {
+                try {
+                    sendLog('The local model is writing a quick answer…');
+                    const r = await localGenerate({ system: lightSystem, userPrompt: lightPrompt + customInstructions, maxTokens: 800 });
+                    lightText = r.text || '';
+                } catch (err) {
+                    console.error('Local model (quick answer) failed:', err.message);
+                }
+            }
+            const quickSources = searchResults.slice(0, 3).map(({ body, ...rest }) => rest);
+            return sendResult({ sources: quickSources, text: lightText || briefFallback(searchResults), model: lightText ? (geminiKey ? GEMINI_MODEL : LOCAL_MODEL.name) : 'auralis-local' });
         }
 
         // Server path — synthesize with the local LFM research model (no Gemini).

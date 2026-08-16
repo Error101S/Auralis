@@ -234,7 +234,9 @@
     }).then(function (out) {
       var raw = extractGenerated(out);
       var parsed = splitThinking(raw);
-      return { text: parsed.answer.trim() || parsed.reasoning.trim() };
+      // Only finished answers surface — raw <think> rambling is never shown.
+      // An empty result makes the app fall back to the server's answer.
+      return { text: parsed.answer.trim() };
     });
   }
 

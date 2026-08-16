@@ -353,18 +353,24 @@ const RESEARCH_RE = /\b(why|how (do|does|can|is|to|are|much|many)|compare|compar
 
 const KNOWLEDGE_RE = /^(what is|what are|what was|what were|what does|what do|whats|whats is|who is|who are|who was|who were|where is|where are|which is|which are|define|definition of|meaning of|is it true|is that true|are there|does |do (i|you|we|they|people)|can (i|you|we)|what is the meaning)/i;
 
-// Short queries that lean on an earlier turn ("what about revenue?",
-// "how old is it?") get the previous user question glued on as context.
-const FOLLOWUP_MARK = /\b(what about|how about|what else|and|also|then|more|expand|its|it|that|this|them|those|one|these|they|again)\b/i;
+// A query is a follow-up only when it OPENS with follow-up language
+// ("what about X?", "why?", "more"). Matching words like "it"/"one"/"and"
+// ANYWHERE glued fresh questions ("what is Skibidi Toilet … keep it short")
+// onto the previous topic and poisoned the web search.
+const FOLLOWUP_START = /^\s*(what about|how about|what else|and|also|then|more|expand|tell me more|explain(\s+more|\s+that|\s+it)?|its|it's|it|that|this|them|those|these|they|again|why|how|continue|go on|elaborate)\b/i;
 
 export function expandQuery(query, history) {
     if (!Array.isArray(history) || history.length === 0) return query;
     const prev = [...history].reverse().find(m => m && m.role === 'user' && typeof m.text === 'string' && m.text.trim());
     if (!prev) return query;
     const q = String(query).trim();
+    // Only true follow-ups get earlier context glued on — fresh questions
+    // search for exactly what the user asked. Bare "why"/"how" only count as
+    // follow-ups when the message is tiny ("why?", "how so?"); a full
+    // question ("how do solar panels work?") is fresh.
     const words = q.split(/\s+/);
-    if (words.length > 8) return q;
-    if (words.length <= 2 || FOLLOWUP_MARK.test(q.toLowerCase())) {
+    const explicitFollowup = /^(what about|how about|what else|tell me more|go on|elaborate|explain\s+(that|it|more)|more|continue|again)\b/i.test(q);
+    if (FOLLOWUP_START.test(q) && (explicitFollowup || words.length <= 3)) {
         const base = prev.text.trim().replace(/[?.!]+$/, '');
         return `${base} ${q}`.trim();
     }

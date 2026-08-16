@@ -134,10 +134,11 @@ export async function localGenerate({ system = '', userPrompt, maxTokens = 1400,
         });
         const raw = extractGenerated(out);
         const parsed = splitThinking(raw);
-        // If the model only produced reasoning and never reached the final
-        // answer, surface the reasoning (still substantive) rather than nothing.
+        // Only a finished answer is shown. Raw <think> rambling is never
+        // surfaced — callers fall back to their own (short) fallbacks when
+        // the model exhausted its budget mid-thought.
         return {
-            text: parsed.answer.trim() || (parsed.reasoning ? `(reasoned)\n\n${parsed.reasoning.trim()}` : ''),
+            text: parsed.answer.trim(),
             reasoning: parsed.reasoning.trim(),
         };
     } finally {
