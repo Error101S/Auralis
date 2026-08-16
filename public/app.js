@@ -22,12 +22,6 @@ const emptyState = $('#emptyState');
 const suggests = $('#suggests');
 const promptEl = $('#prompt');
 const sendBtn = $('#send');
-const exportBtn = $('#exportBtn');
-const providerBtn = $('#providerBtn');
-const providerPop = $('#providerPop');
-const providerList = $('#providerList');
-const providerName = $('#providerName');
-const providerDot = $('#providerDot');
 const plusBtn = $('#plusBtn');
 const plusMenu = $('#plusMenu');
 const fileInput = $('#fileInput');
@@ -40,6 +34,7 @@ const keyPanel = $('#keyPanel');
 const keyInput = $('#keyInput');
 const keyStatus = $('#keyStatus');
 const askPanel = $('#askPanel');
+const visionAsk = $('#visionAsk');
 
 /* ---------- Auralis logo ("Aurora Aperture": interlocking hexagonal iris + spark) ---------- */
 function logoSVG(size = 28, gid = 'g'){
@@ -256,6 +251,7 @@ function renderMessages(){
 function renderUser(m){
   const el = document.createElement('div');
   el.className='msg user';
+  el.dataset.id = m.id;
   let att = '';
   (m.attachments||[]).forEach(a=>{
     if (a.type==='image' && a.thumb) att += `<img class="att-thumb" src="${a.thumb}" alt="${escapeHtml(a.name)}" title="${escapeHtml(a.name)}">`;
@@ -263,9 +259,63 @@ function renderUser(m){
     else if (a.type==='audio') att += `<span class="att-chip">🎙 ${escapeHtml(a.name)}</span>`;
     else att += `<span class="att-chip">📄 ${escapeHtml(a.name)}</span>`;
   });
-  el.innerHTML = `<div class="avatar">Y</div>
-    <div class="body"><div class="bubble">${att?`<div class="att-row">${att}</div>`:''}<div class="bubble-text">${escapeHtml(m.text)}</div></div></div>`;
+  el.innerHTML = `<div class="body"><div class="bubble">${att?`<div class="att-row">${att}</div>`:''}<div class="bubble-text">${escapeHtml(m.text)}</div></div>
+    <div class="u-actions"><button class="act edit" title="Edit this prompt and rerun">✎ Edit</button></div></div>`;
+  el.querySelector('.act.edit').addEventListener('click', ()=>editUserMessage(m));
   messages.appendChild(el);
+}
+
+/* ---------- Prompt editing: fix a sent prompt, rerun the answer ---------- */
+function editUserMessage(m){
+  if (isBusy()){ toast('Wait for the current answer to finish — or press Stop — before editing.'); return; }
+  const el = messages.querySelector(`.msg.user[data-id="${m.id}"]`);
+  if (!el || el.querySelector('.edit-box')) return;
+  const bubble = el.querySelector('.bubble');
+  const prevHTML = bubble.innerHTML;
+  bubble.innerHTML = `<div class="edit-box">
+    <textarea class="edit-area" rows="1"></textarea>
+    <div class="edit-row">
+      <button class="mp-btn edit-save">Save &amp; rerun</button>
+      <button class="mp-btn subtle edit-cancel">Cancel</button>
+    </div>
+  </div>`;
+  const area = bubble.querySelector('.edit-area');
+  area.value = m.text;
+  const fit = ()=>{ area.style.height='auto'; area.style.height = Math.min(220, area.scrollHeight) + 'px'; };
+  fit();
+  area.focus();
+  area.setSelectionRange(area.value.length, area.value.length);
+  area.addEventListener('input', fit);
+  const cancel = ()=>{
+    bubble.innerHTML = prevHTML;
+    el.querySelector('.act.edit').addEventListener('click', ()=>editUserMessage(m));
+  };
+  bubble.querySelector('.edit-cancel').addEventListener('click',(e)=>{ e.stopPropagation(); cancel(); });
+  bubble.querySelector('.edit-save').addEventListener('click',(e)=>{ e.stopPropagation(); rerunEdited(m, area.value); });
+  area.addEventListener('keydown',(e)=>{
+    if (e.key==='Enter' && !e.shiftKey){ e.preventDefault(); rerunEdited(m, area.value); }
+    if (e.key==='Escape'){ e.stopPropagation(); cancel(); }
+  });
+}
+
+async function rerunEdited(m, newText){
+  newText = (newText||'').trim();
+  const chat = currentChat();
+  if (!chat || !newText){ if (!newText) toast('The prompt is empty — nothing to rerun.', 'error'); return; }
+  const idx = chat.messages.findIndex(x=>x.id===m.id);
+  if (idx < 0) return;
+  m.text = newText;
+  // Drop the old answer (and anything after it) so the edit becomes the
+  // newest turn, then generate a fresh answer for the corrected prompt.
+  chat.messages = chat.messages.slice(0, idx + 1);
+  chat.updatedAt = Date.now();
+  saveChats();
+  renderBoth();
+  setSending(true);
+  await runPipeline(newText, { deep: state.settings.deep, web: state.settings.web });
+  setSending(false);
+  renderSidebar();
+  if (!stopRequested) await drainQueue();
 }
 
 /* ---------- Toasts ---------- */
@@ -424,6 +474,7 @@ function renderSourcesInto(bubble, sources){
 }
 
 /* ---------- Streaming word-by-word ---------- */
+/* Resolves with the text actually shown (partial, if stopped mid-stream). */
 function streamIntoMessage(el, answerText, speed=14, avatar=null){
   return new Promise(resolve=>{
     const answer = el.querySelector('.answer');
@@ -432,11 +483,17 @@ function streamIntoMessage(el, answerText, speed=14, avatar=null){
     let i=0;
     const chunk = Math.max(2, Math.round(answerText.length/120));
     const tick = ()=>{
+      if (stopRequested){
+        if (answer) answer.innerHTML = renderMarkdown(answerText.slice(0,i));
+        if (avatar) setLogoState(avatar, 'idle');
+        resolve(answerText.slice(0,i));
+        return;
+      }
       i += chunk;
       if (answer) { answer.innerHTML = renderMarkdown(answerText.slice(0,i) + (i<answerText.length? '▍':'')); }
       messages.scrollTop = messages.scrollHeight;
       if (i < answerText.length) setTimeout(tick, speed);
-      else { if (answer) answer.innerHTML = renderMarkdown(answerText); if (avatar) setLogoState(avatar, 'idle'); resolve(); }
+      else { if (answer) answer.innerHTML = renderMarkdown(answerText); if (avatar) setLogoState(avatar, 'idle'); resolve(answerText); }
     };
     tick();
   });
@@ -444,11 +501,19 @@ function streamIntoMessage(el, answerText, speed=14, avatar=null){
 
 /* ---------- Web search pipeline simulation ---------- */
 let stopRequested = false;
+let turnAbort = null; // AbortController for the in-flight turn's network work
 function setSending(v){
   sendBtn.classList.toggle('stop', v);
   sendBtn.disabled = false;
   promptEl.disabled = false;
   updateQueueBadge();
+}
+/* Stop the active turn: cancels network requests, unblocks the composer
+   immediately, and keeps whatever text already streamed into the answer. */
+function stopTurn(){
+  stopRequested = true;
+  if (turnAbort){ try { turnAbort.abort(); } catch {} }
+  if (isBusy()) setSending(false);
 }
 function toggleSendBtn(){ sendBtn.disabled = !promptEl.value.trim() && !hasPendingAttachments() && !sendBtn.classList.contains('stop'); }
 
@@ -492,6 +557,7 @@ function clearQueue(){
 
 async function drainQueue(){
   while (promptQueue.length > 0){
+    if (stopRequested) break;
     const next = promptQueue.shift();
     updateQueueBadge();
     // Reset the stop flag so a previously-aborted stream doesn't kill the queued one.
@@ -500,6 +566,7 @@ async function drainQueue(){
     await runPipelineDeferred(next.text, next.attachments);
     setSending(false);
     renderSidebar();
+    if (stopRequested) break;
   }
 }
 function runPipelineDeferred(text, attachments){ return runPipeline(text, { deep: state.settings.deep, web: state.settings.web, attachments }); }
@@ -554,30 +621,40 @@ function rememberLocalChat(q){
     localStorage.setItem(CHATLOG_KEY, JSON.stringify(arr.slice(-20)));
   }catch{}
 }
-async function apiSearch(query, { browser = false, web = true, deep = false, attachment = null } = {}){
+async function apiSearch(query, { browser = false, web = true, deep = false, attachment = null, signal = null } = {}){
   rememberLocalChat(query);
   try {
     const ctrl = new AbortController();
     // Server-side synthesis runs the local LFM model on CPU and can take a few
-    // minutes on long research prompts; the in-app Stop button aborts early.
+    // minutes on long research prompts; the Stop button aborts early.
     const timer = setTimeout(()=>ctrl.abort(), 240000);
-    const res = await fetch('/api/search', {
-      method:'POST',
-      headers:{ 'Content-Type':'application/json' },
-      body: JSON.stringify({
-        query,
-        browserSynthesis: !!browser,
-        web: !!web,
-        deep: !!deep,
-        geminiKey: getGeminiKey(),
-        attachment: attachment && attachment.text ? { name: attachment.name, text: attachment.text } : null,
-        history: chatHistory(),
-        memoryId: memoryId(),
-        localChatLog: localChatLog()
-      }),
-      signal: ctrl.signal,
-    });
-    clearTimeout(timer);
+    const onOuterAbort = ()=>ctrl.abort();
+    if (signal){
+      if (signal.aborted) ctrl.abort();
+      else signal.addEventListener('abort', onOuterAbort, { once: true });
+    }
+    let res;
+    try {
+      res = await fetch('/api/search', {
+        method:'POST',
+        headers:{ 'Content-Type':'application/json' },
+        body: JSON.stringify({
+          query,
+          browserSynthesis: !!browser,
+          web: !!web,
+          deep: !!deep,
+          geminiKey: getGeminiKey(),
+          attachment: attachment && attachment.text ? { name: attachment.name, text: attachment.text } : null,
+          history: chatHistory(),
+          memoryId: memoryId(),
+          localChatLog: localChatLog()
+        }),
+        signal: ctrl.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+      if (signal) signal.removeEventListener('abort', onOuterAbort);
+    }
     if (!res.ok) return null;
     return await res.json();
   } catch {
@@ -621,24 +698,8 @@ async function geminiTranscribe(file){
 
 /* ---------- Local engine status (no API keys — models are local) ---------- */
 function updateProviderStatus(){
-  if (!providerName) return;
-  if (getGeminiKey()){
-    providerName.textContent = 'auralis · gemini-2.0-flash';
-    if (modelPanel && !modelPanel.hidden) renderModelList();
-    return;
-  }
-  if (!window.LocalAI){ return; }
-  const st = window.LocalAI.status();
-  const downloading = Object.keys(st).find(k => st[k].state === 'downloading' || st[k].state === 'loading');
-  if (downloading){
-    const s = st[downloading];
-    providerName.textContent = s.state === 'downloading'
-      ? `auralis · downloading ${downloading} model ${s.percent || 0}%`
-      : `auralis · warming ${downloading} model…`;
-  } else {
-    const ready = window.LocalAI.isReady();
-    providerName.textContent = ready ? 'auralis · LFM 2.5 (browser)' : 'auralis · LFM 2.5 (server)';
-  }
+  // The old sidebar provider row is gone; this now only refreshes the model
+  // manager panel so download progress stays live while it's open.
   if (modelPanel && !modelPanel.hidden) renderModelList();
 }
 function addReplies(chat, userText, aiText){
@@ -852,11 +913,43 @@ function synthesize(query, depth, provider, sources){
 }
 
 /* ---------- The pipeline runner ---------- */
-function setStage(stage, name, detail){
-  if (!stage) return;
-  const t = stage.querySelector('.stage-text'), p = stage.querySelector('.providers');
-  if (t) t.textContent = name;
-  if (p) p.innerHTML = detail;
+/* Thinking indicator: the headline always reads "Thinking"; every internal
+   step is recorded in an expandable details log so the user can see exactly
+   what Auralis is doing (and what it found on the web). */
+function makeStage(bubble){
+  const el = document.createElement('div');
+  el.className = 'stage';
+  el.innerHTML = `
+    <div class="stage-head">
+      <span class="stage-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+      <span class="stage-text">Thinking</span>
+      <button class="stage-toggle" type="button" aria-expanded="false">
+        <svg class="chev" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="m6 9 6 6 6-6"/></svg>
+        <span>details</span>
+      </button>
+    </div>
+    <div class="stage-log"></div>`;
+  const log = el.querySelector('.stage-log');
+  const toggle = el.querySelector('.stage-toggle');
+  toggle.addEventListener('click',(e)=>{
+    e.stopPropagation();
+    const open = el.classList.toggle('open');
+    toggle.classList.toggle('open', open);
+    toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+  });
+  bubble.appendChild(el);
+  return {
+    el,
+    step(text){
+      if (!log.isConnected) return;
+      const item = document.createElement('div');
+      item.className = 'log-item';
+      item.textContent = text;
+      log.appendChild(item);
+      while (log.children.length > 40) log.removeChild(log.firstChild);
+      log.scrollTop = log.scrollHeight;
+    }
+  };
 }
 
 /* Shared synthesis: server research (or browser-local model) for a text
@@ -870,7 +963,8 @@ async function fetchAnswer(userText, opts){
     browser: browserReady && !hasKey,
     web: opts.web !== false,
     deep: !!opts.deep,
-    attachment: opts.attachment || null
+    attachment: opts.attachment || null,
+    signal: opts.signal || null
   };
   let api = await apiSearch(userText, callOpts);
   if (api && Array.isArray(api.sources)){
@@ -880,6 +974,7 @@ async function fetchAnswer(userText, opts){
       let localText = null;
       try { localText = await window.LocalAI.answer(userText, api.sources, opts.attachment); }
       catch { localText = null; }
+      if (stopRequested) return null;
       if (localText && localText.text){
         return { sources: normalizeSources(api.sources), text: localText.text, provider: 'auralis-local (browser)' };
       }
@@ -887,10 +982,26 @@ async function fetchAnswer(userText, opts){
       const srv = await apiSearch(userText, Object.assign({}, callOpts, { browser:false }));
       if (srv && srv.text) return { sources: normalizeSources(srv.sources || []), text: srv.text, provider: 'auralis-local (server)' };
     } else if (api.text){
-      return { sources: normalizeSources(api.sources), text: api.text, provider: 'auralis-local (server)' };
+      return { sources: normalizeSources(api.sources), text: api.text, provider: hasKey ? 'gemini-2.0-flash' : 'auralis-local (server)' };
     }
   }
   return null;
+}
+
+/* Ask before pulling the 770 MB vision model: download / Gemini / cancel. */
+let visionAskResolve = null;
+function askVisionDownload(){
+  return new Promise(resolve=>{
+    visionAskResolve = resolve;
+    visionAsk.hidden = false;
+  });
+}
+function settleVisionAsk(v){
+  if (!visionAskResolve) return;
+  const r = visionAskResolve;
+  visionAskResolve = null;
+  visionAsk.hidden = true;
+  r(v);
 }
 
 async function runPipeline(userText, opts){
@@ -915,13 +1026,13 @@ async function runPipeline(userText, opts){
   const aiAvatar = el.querySelector('.avatar-ai');
   setLogoState(aiAvatar, 'thinking');
 
-  const stage = document.createElement('div');
-  stage.innerHTML = `<span class="spinner"></span>
-    <span class="stage-text">Preparing…</span>
-    <span class="providers"></span>`;
-  bubble.appendChild(stage);
+  const stage = makeStage(bubble);
 
   stopRequested = false;
+  // Abort controller for this turn: Stop cancels network work immediately and
+  // frees the composer without waiting for a long model generation.
+  turnAbort = new AbortController();
+  const signal = turnAbort.signal;
   let sources = [], text = null, provider = '';
 
   try {
@@ -934,7 +1045,7 @@ async function runPipeline(userText, opts){
     if (att.audios && att.audios.length){
       const hasKey = !!getGeminiKey();
       for (const a of att.audios){
-        setStage(stage, 'transcribe_audio()', `<span class="pv">${hasKey ? 'gemini' : 'whisper · local'}</span> · transcribing ${escapeHtml(a.name)}…`);
+        stage.step(`Transcribing ${a.name} (${hasKey ? 'Gemini' : 'Whisper, on-device'})…`);
         let t = '';
         if (hasKey){
           try { t = await geminiTranscribe(a.file); } catch { t = ''; }
@@ -945,18 +1056,20 @@ async function runPipeline(userText, opts){
         }
         transcript += (transcript ? '\n' : '') + t;
       }
-      if (!transcript.trim()) throw new Error('No speech detected in the attached audio.');
+      if (transcript.trim()) stage.step(`Heard: “${transcript.trim().slice(0, 120)}${transcript.trim().length > 120 ? '…' : ''}”`);
+      else throw new Error('No speech detected in the attached audio.');
     }
 
     // 2) Images: Gemini vision when a key is saved (no download needed),
-    //    otherwise the local vision model (LFM 2.5 VL, WebGPU).
+    //    otherwise the local vision model (LFM 2.5 VL, WebGPU) — asking
+    //    before its ~770 MB download.
     let visionText = '';
     let visionBy = '';
     if (att.images && att.images.length){
       const hasKey = !!getGeminiKey();
       const vq = hadQuestion ? userText.trim() : 'Describe this image in detail.';
       if (hasKey){
-        setStage(stage, 'vision()', `<span class="pv">gemini</span> · analyzing image${att.images.length>1?'s':''}…`);
+        stage.step(`Analyzing image${att.images.length>1?'s':''} with Gemini…`);
         try {
           visionText = await geminiVision(vq, att.images.map(i=>i.dataUrl));
           if (visionText) visionBy = 'gemini';
@@ -966,8 +1079,23 @@ async function runPipeline(userText, opts){
         if (!(window.LocalAI && window.LocalAI.canAttempt())){
           throw new Error('The local vision model needs WebGPU (Chrome / Edge / Brave). For image analysis without any download, save a Gemini API key via ＋ Tools → Gemini API key.');
         }
+        const vs = window.LocalAI.status().vision || { state: 'idle' };
+        if (vs.state !== 'ready'){
+          const choice = await askVisionDownload();
+          if (choice === 'gemini'){
+            openKeyPanel();
+            throw new Error('Image analysis paused — save a Gemini key, then send the image again.');
+          }
+          if (choice === 'cancel') throw new Error('Image analysis cancelled.');
+          window.LocalAI.setOptIn('vision', true);
+          stage.step(vs.state === 'downloading'
+            ? `Vision model already downloading — ${vs.percent || 0}%…`
+            : 'Downloading the vision model (LFM 2.5 VL, ~770 MB, one time)…');
+          openModelPanel();
+          await window.LocalAI.download('vision');
+        }
         for (const img of att.images){
-          setStage(stage, 'vision()', `<span class="pv">lfm-vl · local</span> · analyzing ${escapeHtml(img.name)}…`);
+          stage.step(`Analyzing ${img.name} (vision model, on-device)…`);
           const desc = await window.LocalAI.describeImage(img.dataUrl, vq);
           if (desc && desc.trim()){
             visionText += (visionText ? '\n\n' : '') + (att.images.length > 1 ? `**${img.name}** — ${desc}` : desc);
@@ -982,6 +1110,7 @@ async function runPipeline(userText, opts){
     if (att.docs && att.docs.length){
       const joined = att.docs.map(d => `# ${d.name}\n${d.text || ''}`).join('\n\n').slice(0, 12000);
       attachment = { name: att.docs.map(d=>d.name).join(', '), text: joined };
+      stage.step(`Attached ${att.docs.length} document${att.docs.length>1?'s':''} (${att.docs.map(d=>d.name).join(', ')})`);
     }
     if (transcript){
       attachment = attachment || { name: 'voice note', text: '' };
@@ -990,25 +1119,38 @@ async function runPipeline(userText, opts){
     if (visionText){
       attachment = attachment || { name: 'image analysis', text: '' };
       attachment.text = (attachment.text ? attachment.text + '\n\n' : '') +
-        'Local vision model analysis of the attached image(s):\n' + visionText;
+        (visionBy === 'gemini' ? 'Gemini analysis of the attached image(s):\n' : 'Local vision model analysis of the attached image(s):\n') + visionText;
     }
     let query = userText.trim();
     if (!query && transcript) query = 'Summarize and respond to this voice note.';
     if (!query && attachment) query = 'Summarize the attached file.';
 
     // 4) Answer. Image-only turns (no question, or web off) are answered
-    //    directly by the vision model; everything else goes through research.
+    //    directly by the vision engine; everything else goes through research.
     if (visionText && (!hadQuestion || opts.web === false)){
       text = visionText;
       provider = visionBy === 'gemini' ? 'gemini-vision' : 'local-vision';
     } else {
-      setStage(stage, 'web_search()', `<span class="pv">duckduckgo</span> · researching the live web…`);
-      const got = await fetchAnswer(query, Object.assign({}, opts, { attachment }));
-      if (got){ sources = got.sources; text = got.text; provider = got.provider; }
+      stage.step(opts.web === false
+        ? 'Web search is off — answering from knowledge' + (attachment ? ' + attachments' : '') + '…'
+        : `Searching the live web for “${query.slice(0, 90)}”…`);
+      const got = await fetchAnswer(query, Object.assign({}, opts, { attachment, signal }));
+      if (stopRequested) throw new DOMException('stopped', 'AbortError');
+      if (got){
+        sources = got.sources; text = got.text; provider = got.provider;
+        if (sources.length){
+          stage.step(`Found ${sources.length} source${sources.length>1?'s':''}:`);
+          sources.slice(0, 10).forEach(s => stage.step(`· ${s.title.slice(0, 70)} — ${s.displayUrl}`));
+        } else {
+          stage.step('No live results came back — answering without web citations.');
+        }
+        stage.step('Synthesizing the answer…');
+      }
     }
 
     // 5) Offline fallback (no server reachable).
     if (!text){
+      stage.step('Server unreachable — using the offline engine.');
       const oi = offlineDetect(query || userText);
       if (oi === 'research'){
         sources = makeSources(query || userText, opts.deep);
@@ -1020,14 +1162,19 @@ async function runPipeline(userText, opts){
       provider = 'offline-demo';
     }
   } catch (err){
-    sources = [];
-    text = '⚠️ ' + (err && err.message ? err.message : 'Something went wrong while processing this turn.');
-    provider = 'error';
-    if (err && /aborted|AbortError/i.test(err.message||'')) stopRequested = true;
+    if (err && (err.name === 'AbortError' || /aborted|AbortError/i.test(err.message || ''))){
+      stopRequested = true;
+    } else {
+      sources = [];
+      text = '⚠️ ' + (err && err.message ? err.message : 'Something went wrong while processing this turn.');
+      provider = 'error';
+    }
+  } finally {
+    if (turnAbort && turnAbort.signal === signal) turnAbort = null;
   }
 
-  if (stopRequested){ stage.remove(); finish(m, chat, '_(stopped)_'); return; }
-  stage.remove();
+  if (stopRequested){ stage.el.remove(); finish(m, chat, '_(stopped)_'); return; }
+  stage.el.remove();
 
   m.sources = sources;
   m.text = text;
@@ -1040,7 +1187,8 @@ async function runPipeline(userText, opts){
   // Copy / Retry actions come from renderAI's actions row (outside the
   // bubble), so nothing extra is appended here.
 
-  await streamIntoMessage(el, m.text, 10, aiAvatar);
+  const shown = await streamIntoMessage(el, m.text, 10, aiAvatar);
+  if (stopRequested && shown && shown !== m.text){ m.text = shown; saveChats(); }
   setLogoState(aiAvatar, 'idle');
   saveChats();
 }
@@ -1119,7 +1267,7 @@ async function send(text){
   setSending(false);
   renderSidebar();
   // Auto-fire any prompts that were queued while this one ran.
-  await drainQueue();
+  if (!stopRequested) await drainQueue();
 }
 
 async function retry(text, replaceId){
@@ -1131,7 +1279,7 @@ async function retry(text, replaceId){
   setSending(false);
   renderSidebar();
   // Auto-fire any prompts that were queued while this retry ran.
-  await drainQueue();
+  if (!stopRequested) await drainQueue();
 }
 
 /* ---------- Events ---------- */
@@ -1161,11 +1309,11 @@ promptEl.addEventListener('keydown',(e)=>{
     // If busy, send() enqueues the prompt instead of running immediately.
     send(v);
   }
-  if (e.key==='Escape'){ stopRequested = true; }
+  if (e.key==='Escape'){ stopTurn(); }
 }, { passive:false });
 
 sendBtn.addEventListener('click',()=>{
-  if (sendBtn.classList.contains('stop')){ stopRequested = true; return; }
+  if (sendBtn.classList.contains('stop')){ stopTurn(); return; }
   send(promptEl.value);
 });
 
@@ -1227,15 +1375,6 @@ document.addEventListener('keydown',(e)=>{
   if (e.key==='Escape' && isMobile() && sidebar.classList.contains('open')){
     closeSidebar();
   }
-});
-
-exportBtn.addEventListener('click',()=>{
-  const c = currentChat(); if (!c) return;
-  const md = `# ${c.title}\n\n${c.messages.map(m=> (m.role==='user'?'**You:**':'**Auralis:**')+'\n\n'+m.text + (m.sources&&m.sources.length? '\n\nSources:\n'+m.sources.map((s,i)=>`${i+1}. [${s.title}](${s.url}) — ${s.displayUrl}`).join('\n'):'')).join('\n\n---\n\n')}`;
-  const blob = new Blob([md],{type:'text/markdown'});
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a'); a.href=url; a.download = c.title.replace(/[^\w]+/g,'_')+'.md'; a.click();
-  URL.revokeObjectURL(url);
 });
 
 /* ---------- Slash command menu ---------- */
@@ -1495,10 +1634,23 @@ function renderAttachRow(){
   });
 }
 
-/* Paste images straight into the prompt, and drop files onto the composer. */
+/* Paste images straight into the prompt, and drop files onto the composer.
+   Very long text pastes become a document attachment instead of flooding the
+   prompt box. */
+const PASTE_ATTACH_THRESHOLD = 1500;
 promptEl.addEventListener('paste',(e)=>{
   const files = e.clipboardData && e.clipboardData.files;
-  if (files && files.length){ e.preventDefault(); attachFiles(files); }
+  if (files && files.length){ e.preventDefault(); attachFiles(files); return; }
+  const text = e.clipboardData && e.clipboardData.getData('text/plain');
+  if (text && text.length > PASTE_ATTACH_THRESHOLD){
+    e.preventDefault();
+    const n = pending.docs.filter(d => /^Pasted text/.test(d.name)).length + 1;
+    const name = n > 1 ? `Pasted text ${n}` : 'Pasted text';
+    pending.docs.push({ name, text: text.slice(0, 60000) });
+    renderAttachRow();
+    toggleSendBtn();
+    toast(`Long paste (${Math.round(text.length/100)/10}k chars) attached as “${name}” — ask anything about it.`);
+  }
 });
 const composerInner = document.querySelector('.composer-inner');
 if (composerInner){
@@ -1690,6 +1842,9 @@ function settleAsk(v){
 document.getElementById('askKey').addEventListener('click', ()=>settleAsk('key'));
 document.getElementById('askLocal').addEventListener('click', ()=>settleAsk('local'));
 document.getElementById('askClose').addEventListener('click', ()=>settleAsk('dismiss'));
+document.getElementById('visionAskDl').addEventListener('click', ()=>settleVisionAsk('download'));
+document.getElementById('visionAskGemini').addEventListener('click', ()=>settleVisionAsk('gemini'));
+document.getElementById('visionAskClose').addEventListener('click', ()=>settleVisionAsk('cancel'));
 document.addEventListener('keydown',(e)=>{
   if (e.key === 'Escape' && !askPanel.hidden) settleAsk('dismiss');
 });
@@ -1714,7 +1869,37 @@ async function maybeAskAboutKey(){
 }
 
 
+/* ---------- Startup animation ---------- */
+/* Full logo-draw + wordmark sequence on the first visit of a session; a
+   shortened beat afterwards. Click anywhere to skip. */
+function playBoot(){
+  const bootEl = document.getElementById('boot');
+  if (!bootEl) return;
+  if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches){
+    bootEl.remove();
+    document.body.classList.add('ready');
+    return;
+  }
+  document.body.classList.add('booting');
+  let seen = false;
+  try { seen = sessionStorage.getItem('auralis.booted') === '1'; } catch {}
+  const hold = seen ? 550 : 2200;
+  let done = false;
+  const lift = ()=>{
+    if (done) return;
+    done = true;
+    bootEl.classList.add('out');
+    document.body.classList.remove('booting');
+    document.body.classList.add('ready');
+    try { sessionStorage.setItem('auralis.booted', '1'); } catch {}
+    setTimeout(()=>bootEl.remove(), 750);
+  };
+  setTimeout(lift, hold);
+  bootEl.addEventListener('click', lift);
+}
+
 function boot(){
+  playBoot();
   loadState();
   // Warm up any local models the user previously opted into (cached after
   // the first download). Nothing downloads until the user asks via the

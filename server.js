@@ -611,7 +611,7 @@ app.post('/api/search', async (req, res) => {
         if (web) {
             try {
                 const results = await search(searchQuery, { safeSearch: SafeSearchType.MODERATE });
-                searchResults = results.results.slice(0, deep ? 8 : 5).map(r => ({
+                searchResults = results.results.slice(0, deep ? 10 : 6).map(r => ({
                     title: r.title,
                     url: r.url,
                     snip: r.description
@@ -621,8 +621,8 @@ app.post('/api/search', async (req, res) => {
             }
             if (searchResults.length === 0) {
                 console.log('Falling back to DDG HTML endpoint...');
-                const fb = await ddgHtmlSearch(searchQuery, { limit: deep ? 8 : 6 });
-                if (fb.length > 0) searchResults = fb.slice(0, deep ? 8 : 5);
+                const fb = await ddgHtmlSearch(searchQuery, { limit: deep ? 10 : 8 });
+                if (fb.length > 0) searchResults = fb.slice(0, deep ? 10 : 6);
                 console.log(`DDG HTML returned ${searchResults.length} results`);
             }
             // NOTE: do NOT fill in mockSources as a substitute for real results —
@@ -631,7 +631,7 @@ app.post('/api/search', async (req, res) => {
             // 2b. Fetch live page content so answers come from CURRENT data.
             // Deep mode fetches full content for more sources.
             if (searchResults.length > 0) {
-                searchResults = await enrichSources(searchResults, { limit: deep ? 6 : 4 });
+                searchResults = await enrichSources(searchResults, { limit: deep ? 8 : 5 });
             }
         }
 

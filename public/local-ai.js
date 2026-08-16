@@ -191,7 +191,7 @@
     });
     var lines = (Array.isArray(sources) ? sources : [])
       .filter(function (s) { return s && s.url && !/example\.com/i.test(s.url); })
-      .slice(0, 8)
+      .slice(0, 10)
       .map(function (s, i) {
         var hasBody = typeof s.body === 'string' && s.body.trim().length > 60;
         var body = hasBody
@@ -289,13 +289,13 @@
         ];
         var chatPrompt = rt.processor.apply_chat_template(messages, { add_generation_prompt: true });
         return rt.processor(image, chatPrompt, { add_special_tokens: false }).then(function (inputs) {
-          return rt.model.generate({
-            input_ids: inputs.input_ids,
-            attention_mask: inputs.attention_mask || null,
-            pixel_values: inputs.pixel_values,
+          // Pass EVERY processor output through: VL models also produce
+          // pixel_attention_mask and spatial_shapes, and generation fails with
+          // "Missing the following inputs" if only ids/pixels are forwarded.
+          return rt.model.generate(Object.assign({}, inputs, {
             do_sample: false,
             max_new_tokens: 384
-          }).then(function (outputs) {
+          })).then(function (outputs) {
             var dims = inputs.input_ids.dims;
             var inputLength = dims[dims.length - 1];
             var generated = typeof outputs.slice === 'function' && outputs.dims && outputs.dims[1] > inputLength
