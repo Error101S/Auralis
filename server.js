@@ -27,17 +27,62 @@ dotenv.config();
 const GEMINI_MODEL = 'gemini-2.0-flash';
 const GEMINI_TIMEOUT_MS = 60000;
 
-async function geminiGenerate({ apiKey, system = '', userPrompt, inlineParts = [], maxTokens = 1400 }) {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(apiKey)}`;
+function geminiPayload({ system = '', userPrompt, inlineParts = [], maxTokens = 1400 }) {
     const payload = {
         contents: [{ role: 'user', parts: [...inlineParts, { text: userPrompt }] }],
         generationConfig: { maxOutputTokens: maxTokens, temperature: 0.4 },
     };
     if (system && system.trim()) payload.system_instruction = { parts: [{ text: system }] };
+    return payload;
+}
+
+// Streaming variant (SSE): tokens are handed to onToken as Gemini types them.
+async function geminiStreamGenerate({ apiKey, system = '', userPrompt, inlineParts = [], maxTokens = 1400, onToken }) {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:streamGenerateContent?alt=sse&key=${encodeURIComponent(apiKey)}`;
     const res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+        body: JSON.stringify(geminiPayload({ system, userPrompt, inlineParts, maxTokens })),
+        signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS),
+    });
+    if (!res.ok) {
+        let detail = '';
+        try { detail = (await res.json())?.error?.message || ''; } catch {}
+        throw new Error(`Gemini API ${res.status}${detail ? ': ' + String(detail).slice(0, 160) : ''}`);
+    }
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '', full = '';
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let nl;
+        while ((nl = buf.indexOf('\n')) >= 0) {
+            const line = buf.slice(0, nl).trim();
+            buf = buf.slice(nl + 1);
+            if (!line.startsWith('data:')) continue;
+            const data = line.slice(5).trim();
+            if (!data || data === '[DONE]') continue;
+            try {
+                const j = JSON.parse(data);
+                const parts = j?.candidates?.[0]?.content?.parts || [];
+                const piece = parts.map(p => p.text || '').join('');
+                if (piece) { full += piece; onToken(piece); }
+            } catch {}
+        }
+    }
+    if (!full.trim()) throw new Error('Gemini returned an empty response');
+    return full;
+}
+
+async function geminiGenerate({ apiKey, system = '', userPrompt, inlineParts = [], maxTokens = 1400, onToken = null }) {
+    if (onToken) return geminiStreamGenerate({ apiKey, system, userPrompt, inlineParts, maxTokens, onToken });
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(apiKey)}`;
+    const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(geminiPayload({ system, userPrompt, inlineParts, maxTokens })),
         signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS),
     });
     if (!res.ok) {
@@ -195,6 +240,10 @@ async function fetchPageText(url) {
             text = String(body).replace(/\s+/g, ' ').trim();
         }
         if (!text) return null;
+        // Drop markdown images (![](url)) from page text: models were copying
+        // them into answers as mangled markdown. Links stay; pictures don't
+        // belong in the model's reading material.
+        text = text.replace(/!\[[^\]]*\]\([^)]*\)/g, '').replace(/\n{3,}/g, '\n\n');
         return text.slice(0, PAGE_MAX_CHARS);
     } catch {
         return null;
@@ -544,6 +593,17 @@ app.post('/api/search', async (req, res) => {
             res.json(obj);
         }
     };
+    // Live typing: model tokens stream to the client as they're generated.
+    const sendDelta = (v) => {
+        if (!wantStream || !v) return;
+        if (!streamStarted) {
+            streamStarted = true;
+            res.setHeader('Content-Type', 'application/x-ndjson');
+            res.flushHeaders?.();
+        }
+        try { res.write(JSON.stringify({ t: 'delta', v }) + '\n'); } catch {}
+    };
+    const onStreamToken = wantStream ? sendDelta : null;
 
     try {
         // Hybrid routing: when the client signals it will synthesize the answer
@@ -780,12 +840,12 @@ app.post('/api/search', async (req, res) => {
                 `[${i + 1}] ${s.title} (${hostOf(s.url)}): ${String(s.body || s.snip || '').replace(/\s+/g, ' ').trim().slice(0, 420)}`
             ).join('\n');
             const lightPrompt = `Today is ${today}.\n\n${memSection}The user asked: "${trimmed}"\n\nReference snippets (numbered; cite like [1] only when a snippet supports what you say):\n${briefSources || '(none found)'}`;
-            const lightSystem = 'You are Auralis, a friendly research assistant. Answer simple questions in 1–3 short, plain sentences — like a quick chat reply, not a report. No headings, no bullet lists, no filler. One fitting emoji is fine. If the snippets don\'t answer it, say so honestly in one sentence. Never mention snippets, searches, or tools.';
+            const lightSystem = 'You are Auralis, a friendly research assistant. Answer simple questions in 1–3 short, plain sentences — like a quick chat reply, not a report. Deliberate briefly (a couple of short thoughts at most) and then answer right away. No headings, no bullet lists, no filler. Plain text only: never include markdown images or links in your answer. One fitting emoji is fine. If the snippets don\'t answer it, say so honestly in one sentence. Never mention snippets, searches, or tools.';
             let lightText = '';
             if (geminiKey) {
                 try {
                     sendLog('Gemini is writing a quick answer… ✨');
-                    lightText = await geminiGenerate({ apiKey: geminiKey, system: lightSystem, userPrompt: lightPrompt + customInstructions, maxTokens: 300 });
+                    lightText = await geminiGenerate({ apiKey: geminiKey, system: lightSystem, userPrompt: lightPrompt + customInstructions, maxTokens: 300, onToken: onStreamToken });
                 } catch (err) {
                     console.error('Gemini (quick answer) failed:', err.message);
                     sendLog('Gemini hiccuped — switching to the local model…');
@@ -794,7 +854,7 @@ app.post('/api/search', async (req, res) => {
             if (!lightText) {
                 try {
                     sendLog('The local model is writing a quick answer…');
-                    const r = await localGenerate({ system: lightSystem, userPrompt: lightPrompt + customInstructions, maxTokens: 800 });
+                    const r = await localGenerate({ system: lightSystem, userPrompt: lightPrompt + customInstructions, maxTokens: 800, onToken: onStreamToken });
                     lightText = r.text || '';
                 } catch (err) {
                     console.error('Local model (quick answer) failed:', err.message);
@@ -881,7 +941,7 @@ GREETINGS & SMALL TALK EXCEPTION: If the user's question is a simple greeting, s
             if (geminiKey) {
                 try {
                     sendLog('Gemini is writing the answer… ✨');
-                    synthesizedText = await geminiGenerate({ apiKey: geminiKey, system: sysPrompt, userPrompt: promptText });
+                    synthesizedText = await geminiGenerate({ apiKey: geminiKey, system: sysPrompt, userPrompt: promptText, onToken: onStreamToken });
                     modelUsed = GEMINI_MODEL;
                     synthesized = true;
                 } catch (err) {
@@ -892,7 +952,7 @@ GREETINGS & SMALL TALK EXCEPTION: If the user's question is a simple greeting, s
             if (!synthesized) {
                 try {
                     sendLog('The local model is writing the answer…');
-                    const result = await localGenerate({ system: sysPrompt, userPrompt: promptText });
+                    const result = await localGenerate({ system: sysPrompt, userPrompt: promptText, onToken: onStreamToken });
                     if (result.text) {
                         synthesizedText = result.text || "No response generated.";
                         modelUsed = LOCAL_MODEL.name;

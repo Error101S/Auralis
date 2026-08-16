@@ -442,7 +442,30 @@ function renderMarkdown(text){
   t = t.replace(/^### (.+)$/gm,(_,h)=>`\n\n<h3>${h}</h3>\n\n`);
   t = t.replace(/^## (.+)$/gm,(_,h)=>`\n\n<h2>${h}</h2>\n\n`);
   t = t.replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>');
-  t = t.replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g,'<a href="$2" target="_blank" rel="noreferrer">$1</a>');
+  // Images wrapped in links: [![alt](img)](url) → one clickable image.
+  t = t.replace(/\[!\[([^\]]*)\]\(([^)\s]+)\)\]\(([^)\s]+)\)/g,(m,alt,img,url)=>{
+    let i = img.trim(); if (/^\/\//.test(i)) i = 'https:' + i;
+    let u = url.trim(); if (/^\/\//.test(u)) u = 'https:' + u;
+    if (!/^https?:\/\//i.test(i) || !/^https?:\/\//i.test(u)) return m;
+    return `<a href="${u}" target="_blank" rel="noreferrer" class="md-img-link"><img class="md-img" src="${i}" alt="${alt}" loading="lazy"></a>`;
+  });
+  // Images ![alt](url) — clickable, protocol-relative URLs normalized.
+  t = t.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g,(m,alt,url)=>{
+    let u = url.trim();
+    if (/^\/\//.test(u)) u = 'https:' + u;
+    if (!/^https?:\/\//i.test(u)) return m;
+    return `<a href="${u}" target="_blank" rel="noreferrer" class="md-img-link"><img class="md-img" src="${u}" alt="${alt}" loading="lazy"></a>`;
+  });
+  // Markdown links [text](url) — including protocol-relative ones.
+  t = t.replace(/\[([^\]]+)\]\(((?:https?:)?\/\/[^)\s]+)\)/g,(m,txt,url)=>{
+    let u = url.trim();
+    if (/^\/\//.test(u)) u = 'https:' + u;
+    return `<a href="${u}" target="_blank" rel="noreferrer">${txt}</a>`;
+  });
+  // Bare URLs become clickable links.
+  t = t.replace(/(^|[\s(])((?:https?:\/\/)[^\s<)]+)/g,(m,pre,u)=>`${pre}<a href="${u}" target="_blank" rel="noreferrer">${u}</a>`);
+  // _italics_ (only as standalone emphasis, not inside words).
+  t = t.replace(/(^|[\s(])_([^_]{1,120}?)_(?=$|[\s.,!?);:])/g,'$1<em>$2</em>');
   t = t.replace(/(?:^|\n)((?:[-*] .+(?:\n|$))+)/g,(block)=>{
     const items = block.trim().split(/\n/).map(l=>l.replace(/^[-*] /,'')).map(i=>`<li>${i}</li>`).join('');
     return `\n\n<ul>${items}</ul>\n\n`;
@@ -672,7 +695,7 @@ function rememberLocalChat(q){
     localStorage.setItem(CHATLOG_KEY, JSON.stringify(arr.slice(-20)));
   }catch{}
 }
-async function apiSearch(query, { browser = false, web = true, deep = false, attachment = null, signal = null, onLog = null } = {}){
+async function apiSearch(query, { browser = false, web = true, deep = false, attachment = null, signal = null, onLog = null, onDelta = null } = {}){
   rememberLocalChat(query);
   try {
     const ctrl = new AbortController();
@@ -727,6 +750,7 @@ async function apiSearch(query, { browser = false, web = true, deep = false, att
           try {
             const ev = JSON.parse(line);
             if (ev.t === 'log'){ if (onLog) onLog(ev.msg); }
+            else if (ev.t === 'delta'){ if (onDelta) onDelta(ev.v); }
             else if (ev.t === 'result') result = ev;
           } catch {}
         }
@@ -1025,6 +1049,18 @@ function makeStage(bubble){
       log.appendChild(item);
       while (log.children.length > 40) log.removeChild(log.firstChild);
       log.scrollTop = log.scrollHeight;
+    },
+    // One continuously-updating line for the live token feed while typing.
+    live(text){
+      if (!log.isConnected) return;
+      let item = log.querySelector('.log-item.live');
+      if (!item){
+        item = document.createElement('div');
+        item.className = 'log-item live';
+        log.appendChild(item);
+      }
+      item.textContent = text;
+      log.scrollTop = log.scrollHeight;
     }
   };
 }
@@ -1042,7 +1078,8 @@ async function fetchAnswer(userText, opts){
     deep: !!opts.deep,
     attachment: opts.attachment || null,
     signal: opts.signal || null,
-    onLog: opts.onLog || null
+    onLog: opts.onLog || null,
+    onDelta: opts.onDelta || null
   };
   let api = await apiSearch(userText, callOpts);
   if (api && Array.isArray(api.sources)){
@@ -1052,7 +1089,7 @@ async function fetchAnswer(userText, opts){
       let localText = null;
       try {
         if (opts.onLog) opts.onLog('Your browser model is writing the answer…');
-        localText = await window.LocalAI.answer(userText, api.sources, opts.attachment, chatHistory(), getInstructions());
+        localText = await window.LocalAI.answer(userText, api.sources, opts.attachment, chatHistory(), getInstructions(), opts.onDelta || null);
       }
       catch { localText = null; }
       if (stopRequested) return null;
@@ -1115,6 +1152,37 @@ async function runPipeline(userText, opts){
   turnAbort = new AbortController();
   const signal = turnAbort.signal;
   let sources = [], text = null, provider = '';
+
+  // Live typing surface. Model tokens arrive through onDelta; tokens before a
+  // closing </think> stream into the details log, and the answer itself types
+  // live into the bubble. When the turn finishes, the final render skips the
+  // typewriter effect if we've already watched it being typed.
+  const live = { el: null, buf: '', lastLog: 0 };
+  const deltaSink = (chunk)=>{
+    if (stopRequested || typeof chunk !== 'string' || !chunk) return;
+    live.buf += chunk;
+    const cut = live.buf.toLowerCase().indexOf('</think>');
+    if (cut >= 0){
+      const answerPart = live.buf.slice(cut + 8);
+      if (!live.el){
+        stage.el.remove();
+        bubble.innerHTML = '';
+        live.el = document.createElement('div');
+        live.el.className = 'answer';
+        bubble.appendChild(live.el);
+        setLogoState(aiAvatar, 'talking');
+      }
+      live.el.innerHTML = renderMarkdown(answerPart) + '▍';
+      messages.scrollTop = messages.scrollHeight;
+    } else {
+      const now = Date.now();
+      if (now - live.lastLog > 90){
+        live.lastLog = now;
+        const tail = live.buf.slice(-200).replace(/\s+/g, ' ');
+        stage.live('💭 ' + (tail.length >= 200 ? '…' : '') + tail);
+      }
+    }
+  };
 
   try {
     const att = opts.attachments || {};
@@ -1216,7 +1284,8 @@ async function runPipeline(userText, opts){
       else stage.step('Web search is off — answering from knowledge' + (attachment ? ' + attachments' : '') + '…');
       const got = await fetchAnswer(query, Object.assign({}, opts, {
         attachment, signal,
-        onLog: (msg)=>stage.step(msg)
+        onLog: (msg)=>stage.step(msg),
+        onDelta: deltaSink
       }));
       if (stopRequested) throw new DOMException('stopped', 'AbortError');
       if (got){
@@ -1262,6 +1331,7 @@ async function runPipeline(userText, opts){
   m.text = text;
   m.provider = provider;
 
+  const watchedItType = !!live.el && live.buf.toLowerCase().includes('</think>');
   bubble.innerHTML='';
   const answer = document.createElement('div');answer.className='answer';
   bubble.appendChild(answer);
@@ -1269,10 +1339,17 @@ async function runPipeline(userText, opts){
   // Copy / Retry actions come from renderAI's actions row (outside the
   // bubble), so nothing extra is appended here.
 
-  const shown = await streamIntoMessage(el, m.text, 10, aiAvatar);
-  if (stopRequested && shown && shown !== m.text){ m.text = shown; saveChats(); }
-  setLogoState(aiAvatar, 'idle');
-  saveChats();
+  if (watchedItType){
+    // The answer already typed itself live — just show the final render.
+    answer.innerHTML = renderMarkdown(m.text);
+    setLogoState(aiAvatar, 'idle');
+    saveChats();
+  } else {
+    const shown = await streamIntoMessage(el, m.text, 10, aiAvatar);
+    if (stopRequested && shown && shown !== m.text){ m.text = shown; saveChats(); }
+    setLogoState(aiAvatar, 'idle');
+    saveChats();
+  }
 }
 
 function finish(m, chat, text){ m.text = text; m.sources=[]; saveChats(); renderMessages(); }

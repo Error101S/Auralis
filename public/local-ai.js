@@ -163,11 +163,13 @@
 
   /* ================= TEXT ENGINE (research synthesis) ================= */
   var textPromise = null;
+  var tfModule = null; // cached transformers module (for TextStreamer)
 
   function loadText() {
     if (!textPromise) {
       setStatus('text', { state: 'downloading', percent: 0 });
       textPromise = loadTransformers().then(function (mod) {
+        tfModule = mod;
         var device = navigator.gpu ? 'webgpu' : 'wasm';
         return mod.pipeline('text-generation', MODELS.text.id, {
           revision: MODELS.text.revision,
@@ -225,11 +227,22 @@
       (lines.length ? lines.join('\n\n') : '(No live web results were returned for this query.)');
   }
 
-  function answer(query, sources, attachment, history, instructions) {
+  function answer(query, sources, attachment, history, instructions, onToken) {
     return loadText().then(function (generator) {
+      var opts = { max_new_tokens: 1400, do_sample: false };
+      // Live typing: hand tokens to the UI as they're generated.
+      if (onToken && tfModule && tfModule.TextStreamer && generator.tokenizer) {
+        try {
+          opts.streamer = new tfModule.TextStreamer(generator.tokenizer, {
+            skip_prompt: true,
+            skip_special_tokens: true,
+            callback_function: function (tok) { try { onToken(String(tok || '')); } catch (e) {} }
+          });
+        } catch (e) { /* streamer is optional */ }
+      }
       return generator(
         [{ role: 'system', content: SYSTEM }, { role: 'user', content: buildPrompt(query, sources, attachment, history, instructions) }],
-        { max_new_tokens: 1400, do_sample: false }
+        opts
       );
     }).then(function (out) {
       var raw = extractGenerated(out);

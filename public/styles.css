@@ -246,6 +246,11 @@ body.ready .composer{animation:shellRise .6s .2s var(--ease) both}
 .bubble code{font-family:'JetBrains Mono';font-size:12.5px;padding:2px 6px;border-radius:5px;background:rgba(255,255,255,.07)}
 .bubble a{color:var(--cyan);text-decoration:none;border-bottom:1px solid rgba(124,246,255,.3)}
 .bubble a:hover{border-bottom-color:var(--cyan)}
+/* markdown images from answers */
+.bubble .md-img{display:block;max-width:min(420px,70%);border-radius:12px;border:1px solid var(--border-strong);margin:10px 0;transition:transform .2s var(--ease)}
+.bubble a.md-img-link{border-bottom:none;display:inline-block}
+.bubble a.md-img-link:hover .md-img{transform:scale(1.015)}
+.log-item.live{color:var(--text-faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .bubble ul,.bubble ol{margin:10px 0 12px;padding-left:20px}
 .bubble li{margin:4px 0}
 .bubble h3{font-family:'Space Grotesk';font-size:15.5px;font-weight:600;margin:14px 0 8px;letter-spacing:-.01em}

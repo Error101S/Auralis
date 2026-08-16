@@ -6,7 +6,7 @@
 // no external model calls. The 1.2B Thinking model is the research-grade one:
 // it reasons through complex questions and cross-references source material.
 
-import { pipeline, env } from '@huggingface/transformers';
+import { pipeline, env, TextStreamer } from '@huggingface/transformers';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -118,7 +118,7 @@ export function splitThinking(text) {
  * @param {number} [opts.timeoutMs]
  * @returns {Promise<{text: string, reasoning: string}>}
  */
-export async function localGenerate({ system = '', userPrompt, maxTokens = 1400, timeoutMs = 300000 } = {}) {
+export async function localGenerate({ system = '', userPrompt, maxTokens = 1400, timeoutMs = 300000, onToken = null } = {}) {
     const generator = await loadPipeline();
     const messages = [];
     if (system && system.trim()) messages.push({ role: 'system', content: system });
@@ -126,12 +126,23 @@ export async function localGenerate({ system = '', userPrompt, maxTokens = 1400,
 
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    // Optional token streaming so the UI can show text as it is typed.
+    const opts = {
+        max_new_tokens: maxTokens,
+        do_sample: false,
+        signal: ctrl.signal,
+    };
+    if (onToken) {
+        try {
+            opts.streamer = new TextStreamer(generator.tokenizer, {
+                skip_prompt: true,
+                skip_special_tokens: true,
+                callback_function: (tok) => { try { onToken(String(tok || '')); } catch {} },
+            });
+        } catch { /* older builds without streamer support fall back silently */ }
+    }
     try {
-        const out = await generator(messages, {
-            max_new_tokens: maxTokens,
-            do_sample: false,
-            signal: ctrl.signal,
-        });
+        const out = await generator(messages, opts);
         const raw = extractGenerated(out);
         const parsed = splitThinking(raw);
         // Only a finished answer is shown. Raw <think> rambling is never
