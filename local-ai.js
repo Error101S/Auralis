@@ -8,6 +8,7 @@
 
 import { pipeline, env, TextStreamer } from '@huggingface/transformers';
 import os from 'os';
+import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -67,12 +68,24 @@ let generatorPromise = null;
 let smallHost = null; // memoized memory check
 
 // The 1.2B q4 model needs ~1.5 GB of RAM to load. Small hosts (Render's free
-// tier is 512 MB) OOM and crash the process — which surfaces as 502s — so on
-// them the server model is disabled and callers fall back to the built-in
-// snippet synthesizers instead of dying.
+function containerMemoryBytes() {
+    try {
+        const v2 = fs.readFileSync('/sys/fs/cgroup/memory.max', 'utf8').trim(); // cgroup v2
+        if (v2 && v2 !== 'max') {
+            const n = Number(v2);
+            if (n > 0) return n;
+        }
+    } catch {}
+    try {
+        const v1 = Number(fs.readFileSync('/sys/fs/cgroup/memory/memory.limit_in_bytes', 'utf8').trim()); // cgroup v1
+        if (v1 > 0 && v1 < 1e15) return v1;
+    } catch {}
+    return os.totalmem();
+}
+
 function localModelSupported() {
     if (smallHost === null) {
-        const mb = os.totalmem() / (1024 * 1024);
+        const mb = containerMemoryBytes() / (1024 * 1024);
         smallHost = !process.env.LFM_FORCE && mb < 1600;
         if (smallHost) console.log(`Local model disabled: host has only ${Math.round(mb)} MB RAM (needs ~1600 MB). Using snippet synthesis.`);
     }
