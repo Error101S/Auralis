@@ -884,7 +884,14 @@ app.post('/api/search', async (req, res) => {
         if (web && (linkSources.length === 0 || searchBase.split(/\s+/).filter(Boolean).length >= 5)) {
             sendLog(`Searching the live web for “${searchBase.slice(0, 80) || searchQuery.slice(0, 80)}”…`);
             try {
-                const results = await search(searchQuery, { safeSearch: SafeSearchType.MODERATE });
+                // duck-duck-scrape has no internal timeout — if DDG blackholes
+                // the connection the whole request would hang forever, so race
+                // it against a hard cap.
+                const capped = Promise.race([
+                    search(searchQuery, { safeSearch: SafeSearchType.MODERATE }),
+                    new Promise(resolve => setTimeout(() => resolve({ results: [] }), 12000)),
+                ]);
+                const results = await capped;
                 searchResults = results.results.slice(0, deep ? 10 : 6).map(r => ({
                     title: r.title,
                     url: r.url,
@@ -968,7 +975,7 @@ app.post('/api/search', async (req, res) => {
             if (!lightText) {
                 try {
                     sendLog('The local model is writing a quick answer…');
-                    const r = await localGenerate({ system: lightSystem, userPrompt: lightPrompt + customInstructions, maxTokens: 1100, onToken: onStreamToken });
+                    const r = await localGenerate({ system: lightSystem, userPrompt: lightPrompt + customInstructions, maxTokens: 1100, timeoutMs: 90000, onToken: onStreamToken });
                     lightText = r.text || '';
                 } catch (err) {
                     console.error('Local model (quick answer) failed:', err.message);
