@@ -52,7 +52,7 @@ input,textarea{font-family:inherit;border:none;background:none;color:inherit;out
 ::selection{background:rgba(155,140,255,.35);color:#fff}
 
 /* ---------- Startup boot sequence ---------- */
-.boot{position:fixed;inset:0;z-index:100;display:grid;place-items:center;background:var(--bg);cursor:pointer;transition:opacity .6s var(--ease),visibility .6s}
+.boot{position:fixed;inset:0;z-index:100;display:grid;place-items:center;background:var(--bg);transition:opacity .6s var(--ease),visibility .6s}
 .boot.out{opacity:0;visibility:hidden;pointer-events:none}
 .boot-inner{display:flex;flex-direction:column;align-items:center;gap:20px}
 .boot .auralis-logo .al-ring{stroke-dasharray:1;stroke-dashoffset:1;animation:bootRing 1s .15s var(--ease) forwards}

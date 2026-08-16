@@ -697,6 +697,24 @@ function rememberLocalChat(q){
 }
 async function apiSearch(query, { browser = false, web = true, deep = false, attachment = null, signal = null, onLog = null, onDelta = null } = {}){
   rememberLocalChat(query);
+  const doFetch = (ctrl) => fetch('/api/search', {
+    method:'POST',
+    headers:{ 'Content-Type':'application/json' },
+    body: JSON.stringify({
+      query,
+      browserSynthesis: !!browser,
+      web: !!web,
+      deep: !!deep,
+      stream: true, // NDJSON progress: what he's searching, reading, writing
+      geminiKey: getGeminiKey(),
+      instructions: getInstructions(),
+      attachment: attachment && attachment.text ? { name: attachment.name, text: attachment.text } : null,
+      history: chatHistory(),
+      memoryId: memoryId(),
+      localChatLog: localChatLog()
+    }),
+    signal: ctrl.signal,
+  });
   try {
     const ctrl = new AbortController();
     // Server-side synthesis runs the local LFM model on CPU and can take a few
@@ -709,24 +727,15 @@ async function apiSearch(query, { browser = false, web = true, deep = false, att
     }
     let res;
     try {
-      res = await fetch('/api/search', {
-        method:'POST',
-        headers:{ 'Content-Type':'application/json' },
-        body: JSON.stringify({
-          query,
-          browserSynthesis: !!browser,
-          web: !!web,
-          deep: !!deep,
-          stream: true, // NDJSON progress: what he's searching, reading, writing
-          geminiKey: getGeminiKey(),
-          instructions: getInstructions(),
-          attachment: attachment && attachment.text ? { name: attachment.name, text: attachment.text } : null,
-          history: chatHistory(),
-          memoryId: memoryId(),
-          localChatLog: localChatLog()
-        }),
-        signal: ctrl.signal,
-      });
+      res = await doFetch(ctrl);
+      // Free-tier hosts (Render) spin down when idle: the first request after
+      // sleep 502s while the instance boots. Wait and try once more.
+      if ((res.status === 502 || res.status === 503) && !ctrl.signal.aborted){
+        if (onLog) onLog('Server was asleep — waking it up…');
+        await sleep(8000);
+        if (ctrl.signal.aborted) return null;
+        res = await doFetch(ctrl);
+      }
     } finally {
       clearTimeout(timer);
       if (signal) signal.removeEventListener('abort', onOuterAbort);
@@ -2077,8 +2086,8 @@ async function maybeAskAboutKey(){
 
 
 /* ---------- Startup animation ---------- */
-/* Full logo-draw + wordmark sequence on the first visit of a session; a
-   shortened beat afterwards. Click anywhere to skip. */
+/* Plays the full sequence every visit — the logo draw, the wordmark, the
+   loading bar — and cannot be skipped (only reduced-motion users bypass it). */
 function playBoot(){
   const bootEl = document.getElementById('boot');
   if (!bootEl) return;
@@ -2088,21 +2097,12 @@ function playBoot(){
     return;
   }
   document.body.classList.add('booting');
-  let seen = false;
-  try { seen = sessionStorage.getItem('auralis.booted') === '1'; } catch {}
-  const hold = seen ? 550 : 2200;
-  let done = false;
-  const lift = ()=>{
-    if (done) return;
-    done = true;
+  setTimeout(()=>{
     bootEl.classList.add('out');
     document.body.classList.remove('booting');
     document.body.classList.add('ready');
-    try { sessionStorage.setItem('auralis.booted', '1'); } catch {}
     setTimeout(()=>bootEl.remove(), 750);
-  };
-  setTimeout(lift, hold);
-  bootEl.addEventListener('click', lift);
+  }, 2200);
 }
 
 function boot(){

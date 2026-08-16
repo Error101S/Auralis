@@ -7,6 +7,7 @@
 // it reasons through complex questions and cross-references source material.
 
 import { pipeline, env, TextStreamer } from '@huggingface/transformers';
+import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -63,9 +64,26 @@ ANSWER QUALITY RULES — follow every rule that applies:
 
 GREETINGS & SMALL TALK EXCEPTION: If the user's question is a simple greeting, small talk, or basic chatter (not a research request), respond warmly and concisely in 1–2 sentences. No citations, no analysis of the term itself, no research framing.`;
 let generatorPromise = null;
+let smallHost = null; // memoized memory check
+
+// The 1.2B q4 model needs ~1.5 GB of RAM to load. Small hosts (Render's free
+// tier is 512 MB) OOM and crash the process — which surfaces as 502s — so on
+// them the server model is disabled and callers fall back to the built-in
+// snippet synthesizers instead of dying.
+function localModelSupported() {
+    if (smallHost === null) {
+        const mb = os.totalmem() / (1024 * 1024);
+        smallHost = !process.env.LFM_FORCE && mb < 1600;
+        if (smallHost) console.log(`Local model disabled: host has only ${Math.round(mb)} MB RAM (needs ~1600 MB). Using snippet synthesis.`);
+    }
+    return !smallHost;
+}
 
 // Lazily load (and keep) the pipeline as a singleton.
 function loadPipeline() {
+    if (!localModelSupported()) {
+        return Promise.reject(new Error('Local model unavailable on this host (not enough RAM).'));
+    }
     if (!generatorPromise) {
         generatorPromise = (async () => {
             const generator = await pipeline('text-generation', LOCAL_MODEL.id, {
