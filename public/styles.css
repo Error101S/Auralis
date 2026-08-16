@@ -403,6 +403,19 @@ kbd{font-family:'JetBrains Mono';font-size:10.5px;padding:1px 5px;border-radius:
 .mp-empty{font-size:12.5px;color:var(--text-dim);text-align:center;padding:14px}
 .mp-foot{font-size:11px;color:var(--text-faint);padding:10px 2px 0;line-height:1.4}
 
+/* ---------- Gemini key panel + no-key ask panel ---------- */
+.key-panel input{
+  width:100%;margin:10px 0 4px;padding:10px 12px;border-radius:10px;
+  background:rgba(0,0,0,.32);border:1px solid var(--border);color:var(--text);
+  font-family:'JetBrains Mono';font-size:12.5px;letter-spacing:.02em;
+}
+.key-panel input:focus{border-color:rgba(124,246,255,.45);outline:none}
+.kp-status{font-size:11px;font-family:'JetBrains Mono';color:var(--text-faint);margin-top:2px}
+.kp-status.set{color:var(--green)}
+.kp-actions{display:flex;gap:8px;margin-top:12px}
+.kp-actions .mp-btn{flex:1}
+.mp-foot a{color:var(--cyan);border-bottom:1px solid rgba(124,246,255,.3)}
+
 /* ---------- Toasts ---------- */
 .toasts{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);z-index:80;display:flex;flex-direction:column;gap:8px;align-items:center;pointer-events:none}
 .toast{max-width:min(480px,calc(100vw - 32px));padding:10px 16px;border-radius:12px;font-size:13px;line-height:1.45;background:rgba(18,18,38,.94);backdrop-filter:blur(16px);border:1px solid var(--border-strong);color:var(--text);box-shadow:var(--shadow);animation:toastIn .25s var(--ease) both}

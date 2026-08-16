@@ -124,17 +124,9 @@
         <!-- Pending attachments (thumbnails / file chips) -->
         <div id="attachRow" class="attach-row" hidden></div>
         <div class="composer-tools">
-          <button id="plusBtn" class="chip plus" title="Add tools, files, voice, models">
+          <button id="plusBtn" class="chip plus" title="Tools: web/deep, attachments, voice, API key, local models">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
             <span>Tools</span>
-          </button>
-          <button id="webToggle" class="chip active" title="Toggle web search">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.5 3 14.5 0 18M12 3c-3 3.5-3 14.5 0 18"/></svg>
-            <span>Web</span>
-          </button>
-          <button id="deepToggle" class="chip" title="Toggle deep research (more sources + full pages)">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16v16H4z"/><path d="M4 9h16M9 4v16"/></svg>
-            <span>Deep</span>
           </button>
           <button id="micChip" class="chip mic hidden" title="Dictate with your voice">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
@@ -166,6 +158,35 @@
     <div class="mp-sub">Downloaded models run 100% on your device and are cached by the browser. Nothing downloads until you ask.</div>
     <div id="modelList" class="mp-list"></div>
     <div class="mp-foot">Models are served from the Hugging Face CDN on first download, then run offline.</div>
+  </div>
+
+  <!-- Gemini API key panel (set / change / remove) -->
+  <div id="keyPanel" class="model-panel key-panel" hidden>
+    <div class="mp-head">
+      <span>Gemini API key</span>
+      <button id="keyPanelClose" class="mp-close" title="Close">✕</button>
+    </div>
+    <div class="mp-sub">Optional. With a key saved, Auralis synthesizes answers with Gemini; without one, the local model handles everything — no key required. The key is stored only in this browser and is sent only to your own Auralis server.</div>
+    <input id="keyInput" type="password" placeholder="AIza…" autocomplete="off" spellcheck="false" aria-label="Gemini API key" />
+    <div id="keyStatus" class="kp-status"></div>
+    <div class="kp-actions">
+      <button id="keySave" class="mp-btn">Save</button>
+      <button id="keyRemove" class="mp-btn subtle">Remove key</button>
+    </div>
+    <div class="mp-foot">Get a free key at <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer">aistudio.google.com/app/apikey</a>.</div>
+  </div>
+
+  <!-- No-key ask panel (chat without a Gemini key → ask to use a local model) -->
+  <div id="askPanel" class="model-panel" hidden>
+    <div class="mp-head">
+      <span>No Gemini API key set</span>
+      <button id="askClose" class="mp-close" title="Continue with the local model">✕</button>
+    </div>
+    <div class="mp-sub">You're chatting without a Gemini API key. You can enter one now, or use Auralis's local model — it needs no key and no account. The server's local model answers right away; downloading the browser model makes it run on your device.</div>
+    <div class="kp-actions">
+      <button id="askKey" class="mp-btn">Enter Gemini key</button>
+      <button id="askLocal" class="mp-btn subtle">Use local model</button>
+    </div>
   </div>
 
   <!-- Hidden file picker for the plus menu -->

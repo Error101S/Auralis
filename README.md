@@ -9,7 +9,12 @@ local model** — no API keys, no Gemini, no cloud AI calls.
 - **Live web research** — DuckDuckGo search (with an HTML-endpoint fallback),
   page-content extraction via Readability, and cited synthesis.
 - **＋ Tools menu** (in the composer) — Web search & Deep research toggles,
-  file attachments, voice input, and the local model manager.
+  file attachments, voice input, the Gemini API key manager, and the local
+  model manager.
+- **Gemini API key (optional)** — set, change, or remove it any time via
+  **＋ → Gemini API key**. With a key saved, Gemini synthesizes answers;
+  without one, Auralis asks whether to use a local model and then answers
+  locally — no key, account, or download required.
 - **Attach files**
   - **Images** → analyzed by **LFM 2.5 VL 450M**, the vision model from
     [Local-Browser-AI](https://github.com/techjarves/local-browser-ai), running

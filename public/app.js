@@ -22,8 +22,6 @@ const emptyState = $('#emptyState');
 const suggests = $('#suggests');
 const promptEl = $('#prompt');
 const sendBtn = $('#send');
-const webToggle = $('#webToggle');
-const deepToggle = $('#deepToggle');
 const exportBtn = $('#exportBtn');
 const providerBtn = $('#providerBtn');
 const providerPop = $('#providerPop');
@@ -38,6 +36,10 @@ const micChip = $('#micChip');
 const modelPanel = $('#modelPanel');
 const modelList = $('#modelList');
 const toasts = $('#toasts');
+const keyPanel = $('#keyPanel');
+const keyInput = $('#keyInput');
+const keyStatus = $('#keyStatus');
+const askPanel = $('#askPanel');
 
 /* ---------- Auralis logo ("Aurora Aperture": interlocking hexagonal iris + spark) ---------- */
 function logoSVG(size = 28, gid = 'g'){
@@ -93,6 +95,15 @@ function summarizeAttachments(atts){
   (atts.docs ||[]).forEach(d=>out.push({ type:'doc',   name:d.name }));
   return out;
 }
+
+/* ---------- Gemini API key (optional; stored only in this browser) ---------- */
+const GEMINI_KEY_STORE = 'auralis.geminiKey';
+const LOCAL_CHOSEN_KEY = 'auralis.localChosen';
+function getGeminiKey(){ try { return (localStorage.getItem(GEMINI_KEY_STORE) || '').trim(); } catch { return ''; } }
+function setGeminiKey(k){ try { localStorage.setItem(GEMINI_KEY_STORE, String(k||'').trim()); } catch {} }
+function clearGeminiKey(){ try { localStorage.removeItem(GEMINI_KEY_STORE); } catch {} }
+function localChosen(){ try { return localStorage.getItem(LOCAL_CHOSEN_KEY) === '1'; } catch { return false; } }
+function markLocalChosen(){ try { localStorage.setItem(LOCAL_CHOSEN_KEY, '1'); } catch {} }
 
 function loadState(){
   try{
@@ -558,6 +569,7 @@ async function apiSearch(query, { browser = false, web = true, deep = false, att
         browserSynthesis: !!browser,
         web: !!web,
         deep: !!deep,
+        geminiKey: getGeminiKey(),
         attachment: attachment && attachment.text ? { name: attachment.name, text: attachment.text } : null,
         history: chatHistory(),
         memoryId: memoryId(),
@@ -586,7 +598,13 @@ function normalizeSources(raw){
 
 /* ---------- Local engine status (no API keys — models are local) ---------- */
 function updateProviderStatus(){
-  if (!window.LocalAI || !providerName) return;
+  if (!providerName) return;
+  if (getGeminiKey()){
+    providerName.textContent = 'auralis · gemini-2.0-flash';
+    if (modelPanel && !modelPanel.hidden) renderModelList();
+    return;
+  }
+  if (!window.LocalAI){ return; }
   const st = window.LocalAI.status();
   const downloading = Object.keys(st).find(k => st[k].state === 'downloading' || st[k].state === 'loading');
   if (downloading){
@@ -821,9 +839,12 @@ function setStage(stage, name, detail){
 /* Shared synthesis: server research (or browser-local model) for a text
    query. Returns { sources, text, provider } or null when unavailable. */
 async function fetchAnswer(userText, opts){
+  // With a Gemini key, server-side Gemini synthesizes; otherwise the browser
+  // model (when downloaded) reasons over the sources locally.
+  const hasKey = !!getGeminiKey();
   const browserReady = !!(window.LocalAI && window.LocalAI.isReady());
   const callOpts = {
-    browser: browserReady,
+    browser: browserReady && !hasKey,
     web: opts.web !== false,
     deep: !!opts.deep,
     attachment: opts.attachment || null
@@ -999,7 +1020,7 @@ async function send(text){
       const map = { ready:'✓ downloaded & ready', downloading:`downloading ${s.percent||0}%`, loading:'warming up…', error:'error — '+(s.error||''), idle:'not downloaded' };
       return `- **${label}** — ${map[s.state]||s.state}${s.state==='idle'&&LA&&LA.optedIn(k)?' (auto-loads on visit)':''}`;
     };
-    addReplies(chat, text, `**Auralis local models** (everything runs on your device — no API keys)\n\n${line('text','Research · LFM 2.5 1.2B Thinking')}\n${line('vision','Vision · LFM 2.5 VL 450M — understands attached images')}\n${line('stt','Speech-to-text · Whisper — transcribes attached audio')}\n\nDownload or manage them via the **＋ Tools → Local models** panel. The research model also runs server-side as a fallback, so Auralis works before any download.`);
+    addReplies(chat, text, `**Auralis models** (no API keys required — Gemini is optional)\n\n- **Gemini API key** — ${getGeminiKey() ? 'set ✓ (Gemini synthesizes answers; manage it via ＋ Tools → Gemini API key)' : 'not set (the local model handles everything; add one via ＋ Tools → Gemini API key)'}\n${line('text','Research · LFM 2.5 1.2B Thinking')}\n${line('vision','Vision · LFM 2.5 VL 450M — understands attached images')}\n${line('stt','Speech-to-text · Whisper — transcribes attached audio')}\n\nDownload or manage local models via the **＋ Tools → Local models** panel. Without any download, the server's local model covers research answers.`);
     return;
   }
 
@@ -1023,6 +1044,11 @@ async function send(text){
   }
 
   chat.messages.push({ id:uid(), role:'user', text, attachments: attSummary });
+
+  // Gemini-key gate: chatting without a key asks (once per session) whether to
+  // use a local model instead. The message is never lost — every choice (or a
+  // dismissal) lets it continue, via the server's local model if no key is set.
+  await maybeAskAboutKey();
 
   const firstUser = chat.messages.filter(m=>m.role==='user').length===1;
   if (chat.title==='New research' && firstUser){
@@ -1100,17 +1126,6 @@ sendBtn.addEventListener('click',()=>{
 
 const _qBadge = document.getElementById('queueBadge');
 if (_qBadge){ _qBadge.style.cursor = 'pointer'; _qBadge.addEventListener('click', clearQueue); }
-
-webToggle.addEventListener('click',()=>{
-  state.settings.web = !state.settings.web;
-  saveSettings();
-  webToggle.classList.toggle('active', state.settings.web);
-});
-deepToggle.addEventListener('click',()=>{
-  state.settings.deep = !state.settings.deep;
-  saveSettings();
-  deepToggle.classList.toggle('active', state.settings.deep);
-});
 
 chatSearch.addEventListener('input',renderSidebar);
 
@@ -1279,15 +1294,18 @@ const PLUS_ICONS = {
   deep:  `<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 4h16v16H4z"/><path d="M4 9h16M9 4v16"/></svg>`,
   attach:`<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>`,
   voice: `<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>`,
-  model: `<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 3 7l9 5 9-5-9-5Z"/><path d="m3 12 9 5 9-5M3 17l9 5 9-5"/></svg>`
+  model: `<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 3 7l9 5 9-5-9-5Z"/><path d="m3 12 9 5 9-5M3 17l9 5 9-5"/></svg>`,
+  key:   `<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="7.5" cy="15.5" r="4.5"/><path d="m10.8 12.2 8.7-8.7M16 4l3 3M13 7l3 3"/></svg>`
 };
 
 function plusItems(){
+  const hasKey = !!getGeminiKey();
   return [
     { key:'web',   icon:PLUS_ICONS.web,   name:'Web search',   desc:'Search the live web for grounded, cited answers', toggle:state.settings.web },
     { key:'deep',  icon:PLUS_ICONS.deep,  name:'Deep research',desc:'More results + full page content for deeper reports', toggle:state.settings.deep },
     { key:'attach',icon:PLUS_ICONS.attach,name:'Attach file',  desc:'Images (local Vision model) · audio (transcribed) · PDF & text docs' },
     { key:'voice', icon:PLUS_ICONS.voice, name:'Voice input',  desc:'Dictate with your microphone — no download needed' },
+    { key:'key',   icon:PLUS_ICONS.key,   name:'Gemini API key', desc: hasKey ? 'Set — open to change or remove it' : 'Not set — chat works without one via the local model', toggle:hasKey },
     { key:'model', icon:PLUS_ICONS.model, name:'Local models', desc:'Download the research / vision / speech models on your terms' },
   ];
 }
@@ -1311,10 +1329,11 @@ function hidePlusMenu(){ plusMenu.hidden = true; plusMenu.innerHTML=''; }
 function pickPlusItem(it){
   hidePlusMenu();
   if (!it) return;
-  if (it.key === 'web')  { webToggle.click();  renderPlusMenuLater(); }
-  if (it.key === 'deep') { deepToggle.click(); renderPlusMenuLater(); }
+  if (it.key === 'web')  { state.settings.web  = !state.settings.web;  saveSettings(); renderPlusMenuLater(); }
+  if (it.key === 'deep') { state.settings.deep = !state.settings.deep; saveSettings(); renderPlusMenuLater(); }
   if (it.key === 'attach'){ fileInput.click(); }
   if (it.key === 'voice'){ toggleDictation(); }
+  if (it.key === 'key'){ openKeyPanel(); }
   if (it.key === 'model'){ openModelPanel(); }
 }
 function renderPlusMenuLater(){ setTimeout(()=>{ renderPlusMenu(); plusMenu.hidden=false; }, 10); }
@@ -1567,6 +1586,85 @@ function renderModelList(){
   });
 }
 
+/* ---------- Gemini API key panel (set / change / remove) ---------- */
+function updateKeyStatus(){
+  const k = getGeminiKey();
+  keyStatus.textContent = k
+    ? `Current key: ${k.slice(0, 6)}…${k.slice(-4)} — Gemini synthesizes your answers`
+    : 'No key saved — the local model handles answers.';
+  keyStatus.classList.toggle('set', !!k);
+}
+function openKeyPanel(){
+  keyInput.value = getGeminiKey();
+  updateKeyStatus();
+  keyPanel.hidden = false;
+  setTimeout(()=>{ try { keyInput.focus(); } catch {} }, 60);
+}
+function closeKeyPanel(){ keyPanel.hidden = true; }
+function saveGeminiKeyFromInput(){
+  const v = keyInput.value.trim();
+  if (v.length < 20){ toast('That doesn\'t look like a Gemini API key (they usually start with "AIza…").', 'error'); return; }
+  setGeminiKey(v);
+  closeKeyPanel();
+  updateProviderStatus();
+  toast('Gemini API key saved — Auralis will use Gemini from the next message.');
+}
+function removeGeminiKeyFromInput(){
+  clearGeminiKey();
+  keyInput.value = '';
+  closeKeyPanel();
+  updateProviderStatus();
+  toast('Gemini API key removed — the local model takes over again.');
+}
+document.getElementById('keyPanelClose').addEventListener('click', closeKeyPanel);
+document.getElementById('keySave').addEventListener('click', saveGeminiKeyFromInput);
+document.getElementById('keyRemove').addEventListener('click', removeGeminiKeyFromInput);
+keyInput.addEventListener('keydown',(e)=>{
+  if (e.key === 'Enter'){ e.preventDefault(); saveGeminiKeyFromInput(); }
+  if (e.key === 'Escape'){ e.stopPropagation(); closeKeyPanel(); }
+});
+
+/* ---------- No-key gate: chat without a Gemini key → ask to use local ---------- */
+let askResolve = null;
+function askUseLocalModel(){
+  return new Promise(resolve=>{
+    askResolve = resolve;
+    askPanel.hidden = false;
+  });
+}
+function settleAsk(v){
+  if (!askResolve) return;
+  const r = askResolve;
+  askResolve = null;
+  askPanel.hidden = true;
+  r(v);
+}
+document.getElementById('askKey').addEventListener('click', ()=>settleAsk('key'));
+document.getElementById('askLocal').addEventListener('click', ()=>settleAsk('local'));
+document.getElementById('askClose').addEventListener('click', ()=>settleAsk('dismiss'));
+document.addEventListener('keydown',(e)=>{
+  if (e.key === 'Escape' && !askPanel.hidden) settleAsk('dismiss');
+});
+/* Show the ask once per browser session until the user picks a side:
+   enter a key, or explicitly choose the local model. */
+function shouldAskAboutKey(){
+  if (getGeminiKey() || localChosen()) return false;
+  try { if (sessionStorage.getItem('auralis.keyAsked') === '1') return false; } catch {}
+  return true;
+}
+async function maybeAskAboutKey(){
+  if (!shouldAskAboutKey()) return;
+  try { sessionStorage.setItem('auralis.keyAsked', '1'); } catch {}
+  const choice = await askUseLocalModel();
+  if (choice === 'key'){
+    openKeyPanel(); // takes effect from the next message
+  } else if (choice === 'local'){
+    markLocalChosen();
+    openModelPanel();
+  }
+  // 'dismiss' → keep going with the server's local model, asked again next session
+}
+
 
 function boot(){
   loadState();
@@ -1578,8 +1676,7 @@ function boot(){
     window.LocalAI.onStatus(()=>{ updateProviderStatus(); });
   }
   updateProviderStatus();
-  webToggle.classList.toggle('active', state.settings.web);
-  deepToggle.classList.toggle('active', state.settings.deep);
+  // Web/Deep toggles live in the ＋ Tools menu now (persisted in settings).
   // Voice dictation shortcut chip (also available inside the ＋ menu).
   if (SpeechRec) micChip.classList.remove('hidden');
   if (state.chats.length===0){

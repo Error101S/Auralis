@@ -18,6 +18,40 @@ import { localGenerate, RESEARCH_SYSTEM, LOCAL_MODEL } from './local-ai.js';
 
 dotenv.config();
 
+// ---------------------------------------------------------------------------
+// Optional Gemini synthesis. The client may send a Gemini API key with a
+// request; when present (and valid) Gemini synthesizes the answer. The key is
+// used for that request only — it is never logged or persisted. Any failure
+// falls straight through to the local model.
+// ---------------------------------------------------------------------------
+const GEMINI_MODEL = 'gemini-2.0-flash';
+const GEMINI_TIMEOUT_MS = 60000;
+
+async function geminiGenerate({ apiKey, system = '', userPrompt, maxTokens = 1400 }) {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(apiKey)}`;
+    const payload = {
+        contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
+        generationConfig: { maxOutputTokens: maxTokens, temperature: 0.4 },
+    };
+    if (system && system.trim()) payload.system_instruction = { parts: [{ text: system }] };
+    const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS),
+    });
+    if (!res.ok) {
+        let detail = '';
+        try { detail = (await res.json())?.error?.message || ''; } catch {}
+        throw new Error(`Gemini API ${res.status}${detail ? ': ' + String(detail).slice(0, 160) : ''}`);
+    }
+    const data = await res.json();
+    const parts = data?.candidates?.[0]?.content?.parts || [];
+    const text = parts.map(p => p.text || '').join('').trim();
+    if (!text) throw new Error('Gemini returned an empty response');
+    return text;
+}
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -357,6 +391,11 @@ app.post('/api/search', async (req, res) => {
             ? { name: String(req.body.attachment.name || 'attachment').slice(0, 200), text: req.body.attachment.text.slice(0, 12000) }
             : null;
 
+        // Optional Gemini key from the client (request-scoped, never stored).
+        const geminiKey = (typeof req.body?.geminiKey === 'string' && req.body.geminiKey.trim().length >= 20)
+            ? req.body.geminiKey.trim().slice(0, 200)
+            : '';
+
         // Persistent memory owner: account when signed in, otherwise the
         // per-device anonymous id the client sends (or the session as a
         // last resort so memory commands still work).
@@ -446,11 +485,20 @@ app.post('/api/search', async (req, res) => {
             // Solver said no (odd phrasing) — fall through to research.
         }
 
-        // 1c. Creative requests: never search. The local LFM model writes it; a
-        // built-in response (honest about its limits) is the fallback.
+        // 1c. Creative requests: never search. Gemini writes it when a key was
+        // sent; otherwise the local LFM model writes it; a built-in response
+        // (honest about its limits) is the fallback.
         if (intent === 'creative') {
+            const promptText = `You are Auralis, a creative writing assistant. The user wants something created, not researched.\n\nToday is ${today}.\n\n${convSection}${memSection}User's request: "${trimmed}"\n\nWrite exactly what they asked for, in the format, length, and tone they requested. Just deliver the creative work — no citations, no sources, no research framing, no explanations of what you did, no follow-up questions.`;
+            if (geminiKey) {
+                try {
+                    const gText = await geminiGenerate({ apiKey: geminiKey, userPrompt: promptText, maxTokens: 2000 });
+                    return res.json({ sources: [], text: gText, model: GEMINI_MODEL });
+                } catch (err) {
+                    console.error('Gemini (creative) failed, using local model:', err.message);
+                }
+            }
             try {
-                const promptText = `You are Auralis, a creative writing assistant. The user wants something created, not researched.\n\nToday is ${today}.\n\n${convSection}${memSection}User's request: "${trimmed}"\n\nWrite exactly what they asked for, in the format, length, and tone they requested. Just deliver the creative work — no citations, no sources, no research framing, no explanations of what you did, no follow-up questions.`;
                 const result = await localGenerate({ userPrompt: promptText });
                 if (result.text) {
                     return res.json({ sources: [], text: result.text, model: LOCAL_MODEL.name });
@@ -578,19 +626,34 @@ ANSWER QUALITY RULES — follow every rule that applies:
 
 GREETINGS & SMALL TALK EXCEPTION: If the user's question is a simple greeting, small talk, or basic chatter (not a research request), respond warmly and concisely in 1–2 sentences. No citations, no analysis of the term itself, no research framing.`;
 
-            try {
-                const result = await localGenerate({ userPrompt: promptText });
-                if (result.text) {
-                    synthesizedText = result.text || "No response generated.";
-                    modelUsed = LOCAL_MODEL.name;
-                } else {
+            // Synthesis: Gemini when the client sent a key, otherwise the
+            // local LFM research model. Both see the exact same prompt; any
+            // Gemini failure falls through to the local model.
+            let synthesized = false;
+            if (geminiKey) {
+                try {
+                    synthesizedText = await geminiGenerate({ apiKey: geminiKey, system: RESEARCH_SYSTEM, userPrompt: promptText });
+                    modelUsed = GEMINI_MODEL;
+                    synthesized = true;
+                } catch (err) {
+                    console.error('Gemini synthesis failed, using local model:', err.message);
+                }
+            }
+            if (!synthesized) {
+                try {
+                    const result = await localGenerate({ userPrompt: promptText });
+                    if (result.text) {
+                        synthesizedText = result.text || "No response generated.";
+                        modelUsed = LOCAL_MODEL.name;
+                    } else {
+                        synthesizedText = localSynthesize(trimmed, searchResults);
+                        modelUsed = 'auralis-local';
+                    }
+                } catch (err) {
+                    console.error('Local model error (research):', err.message);
                     synthesizedText = localSynthesize(trimmed, searchResults);
                     modelUsed = 'auralis-local';
                 }
-            } catch (err) {
-                console.error('Local model error (research):', err.message);
-                synthesizedText = localSynthesize(trimmed, searchResults);
-                modelUsed = 'auralis-local';
             }
         }
 
