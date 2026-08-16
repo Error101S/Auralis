@@ -23,7 +23,10 @@
     text: {
       id: 'LiquidAI/LFM2.5-1.2B-Thinking-ONNX',
       revision: 'e7fe61974e3a167dff77c5722db9a1cb7b57140f',
-      dtype: { webgpu: 'q4', wasm: 'q4' },
+      // q4f16 on WebGPU is the exact combo Local-Browser-AI ships for this
+      // model — the plain q4 file fails session creation with a missing-scale
+      // error on the WebGPU EP of this onnxruntime-web build.
+      dtype: { webgpu: 'q4f16', wasm: 'q4' },
       label: 'Research · LFM 2.5 1.2B Thinking',
       blurb: 'Grounded answer synthesis for web research',
       bytes: 763764000,
@@ -41,13 +44,16 @@
       needsWebGPU: true
     },
     stt: {
-      id: 'Xenova/whisper-base',
+      id: 'Xenova/whisper-tiny',
       revision: 'main',
-      dtype: { wasm: 'q8', webgpu: 'q8' },
-      label: 'Speech-to-text · Whisper base',
+      // whisper-base's int8 decoder ships malformed MatMulNBits scales that
+      // this onnxruntime-web build rejects; q4 (the same quantization the
+      // research model uses) creates sessions cleanly.
+      dtype: { wasm: { encoder_model: 'q8', decoder_model_merged: 'q4' }, webgpu: { encoder_model: 'fp32', decoder_model_merged: 'q4' } },
+      label: 'Speech-to-text · Whisper tiny',
       blurb: 'Transcribes attached audio files on-device',
-      bytes: 94000000,
-      sizeText: '~95 MB',
+      bytes: 97000000,
+      sizeText: '~100 MB',
       needsWebGPU: false
     }
   };
@@ -142,6 +148,13 @@
       var env = mod.env;
       env.allowLocalModels = false;
       env.useBrowserCache = true;
+      // onnxruntime loads its .wasm from its own script URL, but transformers
+      // can repoint that at its dist folder (which ships no .wasm). Pin it to
+      // the backend-served ort dist where the wasm files actually live.
+      try {
+        var wasmEnv = env.backends && env.backends.onnx && env.backends.onnx.wasm;
+        if (wasmEnv) wasmEnv.wasmPaths = '/vendor/ort/';
+      } catch (e) { /* older builds locate the wasm next to the ort bundle */ }
       return mod;
     });
   }

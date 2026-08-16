@@ -17,6 +17,8 @@
     "express": "^5.2.1",
     "express-session": "^1.19.0",
     "linkedom": "^0.16.11",
+    "onnxruntime-common": "1.24.3",
+    "onnxruntime-web": "1.26.0-dev.20260416-b7804b056c",
     "p-limit": "^6.2.0",
     "passport": "^0.7.0",
     "passport-google-oauth20": "^2.0.0",

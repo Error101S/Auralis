@@ -8,6 +8,18 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="styles.css" />
+<!-- Resolve the bare imports inside the transformers web bundle to the
+     onnxruntime files served by the backend (see /vendor/ort routes). -->
+<script type="importmap">
+{
+  "imports": {
+    "onnxruntime-common": "/vendor/ort-common/index.js",
+    "onnxruntime-web": "/vendor/ort/ort.bundle.min.mjs",
+    "onnxruntime-web/webgpu": "/vendor/ort/ort.webgpu.bundle.min.mjs",
+    "onnxruntime-web/wasm": "/vendor/ort/ort.wasm.bundle.min.mjs"
+  }
+}
+</script>
 </head>
 <body>
   <!-- Animated aurora background -->

@@ -596,6 +596,29 @@ function normalizeSources(raw){
   }));
 }
 
+/* ---------- Gemini attachment helpers (used when a key is saved) ---------- */
+async function geminiVision(question, dataUrls){
+  const res = await fetch('/api/vision', {
+    method:'POST',
+    headers:{ 'Content-Type':'application/json' },
+    body: JSON.stringify({ question, images: dataUrls, geminiKey: getGeminiKey() }),
+  });
+  const j = await res.json().catch(()=>({}));
+  if (!res.ok || !j.text) throw new Error(j.error || 'Gemini vision failed');
+  return j.text;
+}
+async function geminiTranscribe(file){
+  const audio = await readAsDataURL(file);
+  const res = await fetch('/api/transcribe', {
+    method:'POST',
+    headers:{ 'Content-Type':'application/json' },
+    body: JSON.stringify({ audio, geminiKey: getGeminiKey() }),
+  });
+  const j = await res.json().catch(()=>({}));
+  if (!res.ok) throw new Error(j.error || 'Gemini transcription failed');
+  return j.text || '';
+}
+
 /* ---------- Local engine status (no API keys — models are local) ---------- */
 function updateProviderStatus(){
   if (!providerName) return;
@@ -905,29 +928,51 @@ async function runPipeline(userText, opts){
     const att = opts.attachments || {};
     const hadQuestion = !!(userText||'').trim();
 
-    // 1) Voice notes: transcribe attached audio locally (Whisper).
+    // 1) Voice notes: transcribe attached audio — Gemini when a key is saved,
+    //    otherwise the local Whisper model.
     let transcript = '';
     if (att.audios && att.audios.length){
+      const hasKey = !!getGeminiKey();
       for (const a of att.audios){
-        setStage(stage, 'transcribe_audio()', `<span class="pv">whisper · local</span> · transcribing ${escapeHtml(a.name)}…`);
-        const r = await window.LocalAI.transcribeFile(a.file);
-        transcript += (transcript ? '\n' : '') + (r.text || '');
+        setStage(stage, 'transcribe_audio()', `<span class="pv">${hasKey ? 'gemini' : 'whisper · local'}</span> · transcribing ${escapeHtml(a.name)}…`);
+        let t = '';
+        if (hasKey){
+          try { t = await geminiTranscribe(a.file); } catch { t = ''; }
+        }
+        if (!t && window.LocalAI){
+          const r = await window.LocalAI.transcribeFile(a.file);
+          t = r.text || '';
+        }
+        transcript += (transcript ? '\n' : '') + t;
       }
       if (!transcript.trim()) throw new Error('No speech detected in the attached audio.');
     }
 
-    // 2) Images: analyze with the local vision model (LFM 2.5 VL).
+    // 2) Images: Gemini vision when a key is saved (no download needed),
+    //    otherwise the local vision model (LFM 2.5 VL, WebGPU).
     let visionText = '';
+    let visionBy = '';
     if (att.images && att.images.length){
-      if (!(window.LocalAI && window.LocalAI.canAttempt())){
-        throw new Error('The vision model needs WebGPU — use Chrome, Edge, or Brave, or send the image without WebGPU.');
-      }
+      const hasKey = !!getGeminiKey();
       const vq = hadQuestion ? userText.trim() : 'Describe this image in detail.';
-      for (const img of att.images){
-        setStage(stage, 'vision()', `<span class="pv">lfm-vl · local</span> · analyzing ${escapeHtml(img.name)}…`);
-        const desc = await window.LocalAI.describeImage(img.dataUrl, vq);
-        if (desc && desc.trim()){
-          visionText += (visionText ? '\n\n' : '') + (att.images.length > 1 ? `**${img.name}** — ${desc}` : desc);
+      if (hasKey){
+        setStage(stage, 'vision()', `<span class="pv">gemini</span> · analyzing image${att.images.length>1?'s':''}…`);
+        try {
+          visionText = await geminiVision(vq, att.images.map(i=>i.dataUrl));
+          if (visionText) visionBy = 'gemini';
+        } catch { visionText = ''; }
+      }
+      if (!visionText){
+        if (!(window.LocalAI && window.LocalAI.canAttempt())){
+          throw new Error('The local vision model needs WebGPU (Chrome / Edge / Brave). For image analysis without any download, save a Gemini API key via ＋ Tools → Gemini API key.');
+        }
+        for (const img of att.images){
+          setStage(stage, 'vision()', `<span class="pv">lfm-vl · local</span> · analyzing ${escapeHtml(img.name)}…`);
+          const desc = await window.LocalAI.describeImage(img.dataUrl, vq);
+          if (desc && desc.trim()){
+            visionText += (visionText ? '\n\n' : '') + (att.images.length > 1 ? `**${img.name}** — ${desc}` : desc);
+            if (!visionBy) visionBy = 'local';
+          }
         }
       }
     }
@@ -955,7 +1000,7 @@ async function runPipeline(userText, opts){
     //    directly by the vision model; everything else goes through research.
     if (visionText && (!hadQuestion || opts.web === false)){
       text = visionText;
-      provider = 'local-vision';
+      provider = visionBy === 'gemini' ? 'gemini-vision' : 'local-vision';
     } else {
       setStage(stage, 'web_search()', `<span class="pv">duckduckgo</span> · researching the live web…`);
       const got = await fetchAnswer(query, Object.assign({}, opts, { attachment }));
@@ -1542,7 +1587,10 @@ function renderModelList(){
   const defs = window.LocalAI.models();
   const st = window.LocalAI.status();
   const kinds = ['text','vision','stt'];
-  modelList.innerHTML = kinds.map(k=>{
+  const keyNote = getGeminiKey()
+    ? `<div class="mp-keynote">🔑 Gemini key active — Gemini handles vision & transcription for attachments too. Local models are the keyless fallback.</div>`
+    : '';
+  modelList.innerHTML = keyNote + kinds.map(k=>{
     const d = defs[k], s = Object.assign({ _kind:k }, st[k] || { state:'idle', percent:0 });
     const sl = statusLine(s);
     const busy = s.state === 'downloading' || s.state === 'loading';

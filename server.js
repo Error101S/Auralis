@@ -27,10 +27,10 @@ dotenv.config();
 const GEMINI_MODEL = 'gemini-2.0-flash';
 const GEMINI_TIMEOUT_MS = 60000;
 
-async function geminiGenerate({ apiKey, system = '', userPrompt, maxTokens = 1400 }) {
+async function geminiGenerate({ apiKey, system = '', userPrompt, inlineParts = [], maxTokens = 1400 }) {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(apiKey)}`;
     const payload = {
-        contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
+        contents: [{ role: 'user', parts: [...inlineParts, { text: userPrompt }] }],
         generationConfig: { maxOutputTokens: maxTokens, temperature: 0.4 },
     };
     if (system && system.trim()) payload.system_instruction = { parts: [{ text: system }] };
@@ -52,12 +52,73 @@ async function geminiGenerate({ apiKey, system = '', userPrompt, maxTokens = 140
     return text;
 }
 
+// Split a data URL ("data:mime;base64,payload") for Gemini inline_data.
+function splitDataUrl(dataUrl) {
+    const m = /^data:([^;]+);base64,(.+)$/s.exec(String(dataUrl || ''));
+    if (!m) return null;
+    return { mimeType: m[1], data: m[2] };
+}
+
+function clientKey(body) {
+    return (typeof body?.geminiKey === 'string' && body.geminiKey.trim().length >= 20)
+        ? body.geminiKey.trim().slice(0, 200)
+        : '';
+}
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '25mb' })); // image/audio attachments are posted as base64
+
+// Gemini vision: analyze attached images when the client has a key saved.
+// (The browser's local LFM vision model covers the keyless path.)
+app.post('/api/vision', async (req, res) => {
+    const apiKey = clientKey(req.body);
+    if (!apiKey) return res.status(400).json({ error: 'A Gemini API key is required (＋ Tools → Gemini API key).' });
+    const q = (typeof req.body?.question === 'string' && req.body.question.trim())
+        ? req.body.question.trim().slice(0, 2000)
+        : 'Describe this image in detail.';
+    const inlineParts = (Array.isArray(req.body?.images) ? req.body.images : [])
+        .map(splitDataUrl)
+        .filter(p => p && /^image\//.test(p.mimeType))
+        .slice(0, 4)
+        .map(p => ({ inline_data: { mime_type: p.mimeType, data: p.data } }));
+    if (inlineParts.length === 0) return res.status(400).json({ error: 'No valid image attachments supplied.' });
+    try {
+        const text = await geminiGenerate({
+            apiKey,
+            system: 'You are Auralis, a visual analysis assistant. Answer the user\'s question about the attached image(s) directly and precisely. If there are several images, cover each one (Image 1, Image 2 …). Plain language; markdown only when it helps.',
+            userPrompt: q,
+            inlineParts,
+            maxTokens: 1200,
+        });
+        res.json({ text, model: GEMINI_MODEL });
+    } catch (err) {
+        res.status(502).json({ error: err.message });
+    }
+});
+
+// Gemini transcription: transcribe an attached audio file when a key is saved.
+// (The browser's local Whisper model covers the keyless path.)
+app.post('/api/transcribe', async (req, res) => {
+    const apiKey = clientKey(req.body);
+    if (!apiKey) return res.status(400).json({ error: 'A Gemini API key is required (＋ Tools → Gemini API key).' });
+    const part = splitDataUrl(req.body?.audio);
+    if (!part || !/^audio\//.test(part.mimeType)) return res.status(400).json({ error: 'No valid audio attachment supplied.' });
+    try {
+        const text = await geminiGenerate({
+            apiKey,
+            userPrompt: 'Transcribe this audio recording verbatim. Output ONLY the transcript text — no labels, no commentary, no quotes. If it contains no speech, output nothing.',
+            inlineParts: [{ inline_data: { mime_type: part.mimeType, data: part.data } }],
+            maxTokens: 2048,
+        });
+        res.json({ text, model: GEMINI_MODEL });
+    } catch (err) {
+        res.status(502).json({ error: err.message });
+    }
+});
 
 // ---------- Live page content fetcher (refreshes outdated info) ----------
 const turndown = new TurndownService({ headingStyle: 'atx', codeBlockStyle: 'fenced' });
@@ -257,6 +318,30 @@ app.use(express.static(path.join(__dirname, 'public')));
 // needs none of this).
 app.use('/vendor/transformers', express.static(
     path.join(__dirname, 'node_modules', '@huggingface', 'transformers', 'dist'),
+    {
+        setHeaders: (res) => {
+            res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+            res.setHeader('Cache-Control', 'public, max-age=3600');
+        },
+    }
+));
+
+// The transformers web bundle imports the bare specifiers "onnxruntime-common"
+// and "onnxruntime-web/webgpu". Browsers can only resolve those through an
+// import map (see public/index.html), and the map needs the actual files:
+// serve the onnxruntime packages so /vendor/ort/*.mjs + .wasm resolve locally
+// instead of failing with "Failed to resolve module specifier".
+app.use('/vendor/ort', express.static(
+    path.join(__dirname, 'node_modules', 'onnxruntime-web', 'dist'),
+    {
+        setHeaders: (res) => {
+            res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+            res.setHeader('Cache-Control', 'public, max-age=3600');
+        },
+    }
+));
+app.use('/vendor/ort-common', express.static(
+    path.join(__dirname, 'node_modules', 'onnxruntime-common', 'dist', 'esm'),
     {
         setHeaders: (res) => {
             res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
