@@ -620,7 +620,7 @@ function isSimpleLookup(q){
 function briefFallback(sources){
     const s = (sources || []).find(x => (x.body || x.snip || '').trim().length > 40) || (sources || [])[0];
     if (!s) return "I couldn't reach the web just now and my offline knowledge doesn't cover that — try again in a moment? 🤔";
-    const text = String(s.body || s.snip || '').replace(/\s+/g, ' ').trim();
+    const text = String(s.body || s.snip || '').replace(/\s+/g, ' ').replace(/_{1,3}([^_]{1,80})_{1,3}/g, '$1').trim();
     const sentences = text.split(/(?<=[.!?])\s+/).filter(Boolean);
     let out = '';
     for (const sent of sentences) {
@@ -957,6 +957,13 @@ app.post('/api/search', async (req, res) => {
 
         // 3a. Simple lookup → chat-style brief answer (1–3 sentences).
         if (isSimpleLookup(trimmed)) {
+            // Quick answers read best from Wikipedia's clean prose extract —
+            // scraped article pages start with infobox noise ("Genre … Created
+            // by …"), so put the API summary first when one exists.
+            if (searchResults.length) {
+                const wiki = await wikipediaLookup(trimmed);
+                if (wiki) searchResults = [wiki, ...searchResults.filter(s => !/\/\/en\.wikipedia\.org\//i.test(s.url))].slice(0, 4);
+            }
             const briefSources = searchResults.slice(0, 3).map((s, i) =>
                 `[${i + 1}] ${s.title} (${hostOf(s.url)}): ${String(s.body || s.snip || '').replace(/\s+/g, ' ').trim().slice(0, 420)}`
             ).join('\n');
