@@ -107,6 +107,13 @@
       </button>
       <div class="chat-title" id="chatTitle">New research</div>
       <div class="topbar-spacer"></div>
+      <button id="authBtn" class="icon-btn auth-btn" title="Sign in" hidden>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>
+        <span class="auth-text">Sign in</span>
+      </button>
+      <button id="userBtn" class="icon-btn user-btn" title="Account" hidden>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+      </button>
       <button id="settingsBtn" class="icon-btn" title="Settings">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>
       </button>
@@ -132,6 +139,10 @@
       </div>
       <h1>What should we <em>uncover</em>?</h1>
       <p>Auralis reads the live web across 24 search engines, then reasons for you.</p>
+      <div id="authPrompt" class="auth-prompt" hidden>
+        <p class="auth-hint">✨ Sign in to save memories across chats and unlock all features</p>
+        <button id="emptyAuthBtn" class="auth-cta">Sign in with Google</button>
+      </div>
       <div class="suggests" id="suggests">
         <button class="suggest" data-q="Latest breakthroughs in nuclear fusion — is commercial fusion close?">⚛️ Will we have nuclear fusion reactors this decade?</button>
         <button class="suggest" data-q="Best mechanical keyboards under $150 in 2026 for programming">⌨️ Best programming keyboards under $150</button>

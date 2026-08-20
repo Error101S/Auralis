@@ -37,6 +37,10 @@ const keyStatus = $('#keyStatus');
 const memoryList = $('#memoryList');
 const memoryRefresh = $('#memoryRefresh');
 const memoryClear = $('#memoryClear');
+const authBtn = $('#authBtn');
+const userBtn = $('#userBtn');
+const authPrompt = $('#authPrompt');
+const emptyAuthBtn = $('#emptyAuthBtn');
 const askPanel = $('#askPanel');
 const visionAsk = $('#visionAsk');
 
@@ -420,6 +424,45 @@ function renderAI(m){
 }
 
 function renderBoth(){ renderSidebar(); renderMessages(); toggleSendBtn(); }
+
+/* ---------- Auth UI ---------- */
+async function checkAuthStatus(){
+  try {
+    const res = await fetch('/api/user');
+    if (!res.ok) return;
+    const data = await res.json();
+    if (data.loggedIn) {
+      authBtn.hidden = true;
+      userBtn.hidden = false;
+      if (authPrompt) authPrompt.hidden = true;
+    } else {
+      authBtn.hidden = false;
+      userBtn.hidden = true;
+      if (authPrompt) authPrompt.hidden = false;
+    }
+  } catch (err) {
+    console.error('Failed to check auth status:', err);
+  }
+}
+
+if (authBtn) {
+  authBtn.addEventListener('click', () => {
+    window.location.href = '/auth/google';
+  });
+}
+
+if (emptyAuthBtn) {
+  emptyAuthBtn.addEventListener('click', () => {
+    window.location.href = '/auth/google';
+  });
+}
+
+if (userBtn) {
+  userBtn.addEventListener('click', () => {
+    // Show user menu or go to settings
+    openSettings('about');
+  });
+}
 
 /* ---------- Memory Tab ---------- */
 async function loadMemories(){
@@ -1657,6 +1700,7 @@ function initSidebar(){
   else openSidebar();
 }
 initSidebar();
+checkAuthStatus();
 window.addEventListener('resize',()=>{
   if (isMobile() && sidebar.classList.contains('collapsed')){
     sidebar.classList.remove('collapsed');
