@@ -513,11 +513,23 @@ app.get('/api/user', (req, res) => {
             }
         });
     } else {
+        const hasClientId = !!process.env.GOOGLE_CLIENT_ID;
+        const hasClientSecret = !!process.env.GOOGLE_CLIENT_SECRET;
+        const isValidId = process.env.GOOGLE_CLIENT_ID !== 'missing_client_id';
+        const isValidSecret = process.env.GOOGLE_CLIENT_SECRET !== 'missing_client_secret';
+        
+        console.log('Auth config check:', {
+            hasClientId,
+            hasClientSecret,
+            isValidId,
+            isValidSecret,
+            clientIdLength: process.env.GOOGLE_CLIENT_ID?.length || 0,
+            clientSecretLength: process.env.GOOGLE_CLIENT_SECRET?.length || 0
+        });
+        
         res.json({ 
             loggedIn: false,
-            authAvailable: !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET &&
-                            process.env.GOOGLE_CLIENT_ID !== 'missing_client_id' &&
-                            process.env.GOOGLE_CLIENT_SECRET !== 'missing_client_secret')
+            authAvailable: hasClientId && hasClientSecret && isValidId && isValidSecret
         });
     }
 });
