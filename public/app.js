@@ -34,6 +34,9 @@ const settingsWrap = $('#settingsWrap');
 const settingsBtn = $('#settingsBtn');
 const keyInput = $('#keyInput');
 const keyStatus = $('#keyStatus');
+const memoryList = $('#memoryList');
+const memoryRefresh = $('#memoryRefresh');
+const memoryClear = $('#memoryClear');
 const askPanel = $('#askPanel');
 const visionAsk = $('#visionAsk');
 
@@ -390,6 +393,13 @@ function renderAI(m){
       <button class="act regen"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>Retry</button>
     </div></div>`;
   const bubble = el.querySelector('.bubble');
+  
+  // Render finance widget if data is available
+  if (m.financeData) {
+    const financeCard = renderFinanceCard(m.financeData);
+    if (financeCard) bubble.appendChild(financeCard);
+  }
+  
   const answer = document.createElement('div');
   answer.className='answer';
   bubble.appendChild(answer);
@@ -410,6 +420,128 @@ function renderAI(m){
 }
 
 function renderBoth(){ renderSidebar(); renderMessages(); toggleSendBtn(); }
+
+/* ---------- Memory Tab ---------- */
+async function loadMemories(){
+  if (!memoryList) return;
+  try {
+    const res = await fetch('/api/user');
+    if (!res.ok) return;
+    const data = await res.json();
+    if (!data.loggedIn) {
+      memoryList.innerHTML = '<div class="memory-empty">Sign in to view and manage your memories.</div>';
+      return;
+    }
+    // Fetch memories from server
+    const memRes = await fetch('/api/memories');
+    if (!memRes.ok) {
+      memoryList.innerHTML = '<div class="memory-empty">Failed to load memories.</div>';
+      return;
+    }
+    const memories = await memRes.json();
+    if (!memories || memories.length === 0) {
+      memoryList.innerHTML = '<div class="memory-empty">No memories saved yet. Tell Auralis things like "remember that I use Linux" and it will remember them.</div>';
+      return;
+    }
+    memoryList.innerHTML = memories.map((m, i) => `
+      <div class="memory-item">
+        <span class="memory-text">${escapeHtml(m)}</span>
+        <button class="memory-delete" data-index="${i}">✕</button>
+      </div>
+    `).join('');
+    memoryList.querySelectorAll('.memory-delete').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const idx = parseInt(btn.dataset.index);
+        await deleteMemory(idx);
+        loadMemories();
+      });
+    });
+  } catch (err) {
+    console.error('Failed to load memories:', err);
+    memoryList.innerHTML = '<div class="memory-empty">Failed to load memories.</div>';
+  }
+}
+
+async function deleteMemory(index){
+  try {
+    await fetch('/api/memories', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ index })
+    });
+    toast('Memory deleted');
+  } catch (err) {
+    console.error('Failed to delete memory:', err);
+    toast('Failed to delete memory', 'error');
+  }
+}
+
+if (memoryRefresh) {
+  memoryRefresh.addEventListener('click', loadMemories);
+}
+if (memoryClear) {
+  memoryClear.addEventListener('click', async () => {
+    if (!confirm('Are you sure you want to clear all memories?')) return;
+    try {
+      await fetch('/api/memories', { method: 'DELETE' });
+      toast('All memories cleared');
+      loadMemories();
+    } catch (err) {
+      console.error('Failed to clear memories:', err);
+      toast('Failed to clear memories', 'error');
+    }
+  });
+}
+
+/* ---------- Image Search ---------- */
+async function searchImages(query){
+  try {
+    const res = await fetch(`/api/images?q=${encodeURIComponent(query)}`);
+    if (!res.ok) throw new Error('Image search failed');
+    const data = await res.json();
+    return data.images || [];
+  } catch (err) {
+    console.error('Image search error:', err);
+    return [];
+  }
+}
+
+/* ---------- Finance Widget ---------- */
+function renderFinanceCard(data){
+  if (!data || !data.price) return null;
+  const el = document.createElement('div');
+  el.className = 'finance-card';
+  
+  const changeColor = data.change > 0 ? '#00c853' : (data.change < 0 ? '#ff1744' : '#ffffff');
+  const changeIcon = data.change > 0 ? '▲' : (data.change < 0 ? '▼' : '−');
+  const changeSign = data.change > 0 ? '+' : '';
+  
+  let extraRows = '';
+  if (data.marketCap) {
+    extraRows += `<div class="fc-row"><span class="fc-label">Market Cap</span><span class="fc-value">$${data.marketCap.toLocaleString()} ${data.marketCapUnit || ''}</span></div>`;
+  }
+  if (data.high && data.low) {
+    extraRows += `<div class="fc-row"><span class="fc-label">Day Range</span><span class="fc-value">$${data.low.toLocaleString()} - $${data.high.toLocaleString()}</span></div>`;
+  }
+  if (data.volume) {
+    extraRows += `<div class="fc-row"><span class="fc-label">Volume</span><span class="fc-value">${data.volume.toLocaleString()} ${data.volumeUnit || ''}</span></div>`;
+  }
+  
+  el.innerHTML = `
+    <div class="fc-header">
+      <div class="fc-company">
+        <span class="fc-name">${escapeHtml(data.company || 'Company')}</span>
+        ${data.ticker ? `<span class="fc-ticker">${escapeHtml(data.ticker)}</span>` : ''}
+      </div>
+      <div class="fc-price">$${data.price.toLocaleString()}</div>
+    </div>
+    <div class="fc-change" style="color: ${changeColor}">
+      ${changeIcon} ${changeSign}${data.change?.toFixed(2) || '0.00'} (${data.changePercent ? changeSign + data.changePercent.toFixed(2) + '%' : '0.00%'})
+    </div>
+    ${extraRows ? `<div class="fc-extra">${extraRows}</div>` : ''}
+  `;
+  return el;
+}
 
 /* ---------- markdown-lite ---------- */
 function escapeHtml(s){return (s==null?'':String(s)).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
@@ -1975,6 +2107,10 @@ function openSettings(tab){
   if (instrBox && instrBox.value !== instr) instrBox.value = instr;
   if (tab) activateSettingsTab(tab);
   else { const active = settingsWrap.querySelector('.set-tab.active'); if (active) activateSettingsTab(active.dataset.tab); }
+  // Load memories if memory tab is opened
+  if (tab === 'memory' || (!tab && settingsWrap.querySelector('.set-tab.active')?.dataset.tab === 'memory')) {
+    loadMemories();
+  }
 }
 function closeSettings(){ settingsWrap.hidden = true; }
 function activateSettingsTab(tab){
@@ -1985,7 +2121,10 @@ settingsBtn.addEventListener('click', ()=>openSettings());
 document.getElementById('settingsClose').addEventListener('click', closeSettings);
 settingsWrap.addEventListener('mousedown',(e)=>{ if (e.target === settingsWrap) closeSettings(); });
 settingsWrap.querySelectorAll('.set-tab').forEach(b=>{
-  b.addEventListener('click', ()=>activateSettingsTab(b.dataset.tab));
+  b.addEventListener('click', ()=>{
+    activateSettingsTab(b.dataset.tab);
+    if (b.dataset.tab === 'memory') loadMemories();
+  });
 });
 document.addEventListener('keydown',(e)=>{
   if (e.key === 'Escape' && !settingsWrap.hidden){ e.stopPropagation(); closeSettings(); }

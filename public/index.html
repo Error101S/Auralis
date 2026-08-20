@@ -196,6 +196,9 @@
         <nav class="set-tabs">
           <button class="set-tab active" data-tab="keys">🔑 API keys</button>
           <button class="set-tab" data-tab="persona">✨ Instructions</button>
+          <button class="set-tab" data-tab="memory">🧠 Memory</button>
+          <button class="set-tab" data-tab="skills">⚡ Skills</button>
+          <button class="set-tab" data-tab="updates">📜 Updates</button>
           <button class="set-tab" data-tab="look">🎨 Appearance</button>
           <button class="set-tab" data-tab="about">ℹ️ About</button>
         </nav>
@@ -233,14 +236,115 @@
             </div>
           </section>
 
+          <section class="set-pane" data-pane="memory">
+            <h3>Memory</h3>
+            <p class="set-note">Things Auralis remembers about you across all chats. These facts help personalize responses.</p>
+            <div id="memoryList" class="memory-list">
+              <div class="memory-empty">No memories saved yet. Tell Auralis things like "remember that I use Linux" and it will remember them.</div>
+            </div>
+            <div class="kp-actions">
+              <button id="memoryRefresh" class="mp-btn">Refresh</button>
+              <button id="memoryClear" class="mp-btn subtle">Clear all</button>
+            </div>
+          </section>
+
+          <section class="set-pane" data-pane="skills">
+            <h3>Skills</h3>
+            <p class="set-note">Special capabilities Auralis has to help you with specific tasks.</p>
+            <div class="skills-grid">
+              <div class="skill-card">
+                <div class="skill-icon">🔬</div>
+                <div class="skill-name">Web Research</div>
+                <div class="skill-desc">Searches 24+ engines and synthesizes cited answers</div>
+              </div>
+              <div class="skill-card">
+                <div class="skill-icon">📊</div>
+                <div class="skill-name">Data Queries</div>
+                <div class="skill-desc">Stock prices, weather, sports scores with direct answers</div>
+              </div>
+              <div class="skill-card">
+                <div class="skill-icon">🖼️</div>
+                <div class="skill-name">Image Analysis</div>
+                <div class="skill-desc">Understand and describe images you share</div>
+              </div>
+              <div class="skill-card">
+                <div class="skill-icon">🎙️</div>
+                <div class="skill-name">Voice Input</div>
+                <div class="skill-desc">Dictate messages with your voice</div>
+              </div>
+              <div class="skill-card">
+                <div class="skill-icon">🧮</div>
+                <div class="skill-name">Calculations</div>
+                <div class="skill-desc">Math, unit conversions, date calculations</div>
+              </div>
+              <div class="skill-card">
+                <div class="skill-icon">📎</div>
+                <div class="skill-name">Document Context</div>
+                <div class="skill-desc">Upload PDFs, text files, and more as context</div>
+              </div>
+            </div>
+          </section>
+
+          <section class="set-pane" data-pane="updates">
+            <h3>Update Log</h3>
+            <p class="set-note">Recent improvements and new features.</p>
+            <div class="updates-list">
+              <div class="update-item">
+                <div class="update-version">v1.2.0</div>
+                <div class="update-date">2025-01-15</div>
+                <div class="update-desc">
+                  <ul>
+                    <li>Added smart data query detection for stocks, weather, and sports</li>
+                    <li>Added finance widget/card to display stock data above responses</li>
+                    <li>Optimized search queries for factual data</li>
+                    <li>Updated system prompts to be direct with numbers and data</li>
+                    <li>Fixed memory leaks: timer cleanup, stream reader release, session cleanup</li>
+                    <li>Added memory tab to view and manage saved memories</li>
+                    <li>Added skills tab to showcase capabilities</li>
+                    <li>Added update log for tracking changes</li>
+                  </ul>
+                </div>
+              </div>
+              <div class="update-item">
+                <div class="update-version">v1.1.0</div>
+                <div class="update-date">2025-01-10</div>
+                <div class="update-desc">
+                  <ul>
+                    <li>Added local model support with WebGPU</li>
+                    <li>Improved streaming responses</li>
+                    <li>Better error handling and recovery</li>
+                  </ul>
+                </div>
+              </div>
+              <div class="update-item">
+                <div class="update-version">v1.0.0</div>
+                <div class="update-date">2025-01-01</div>
+                <div class="update-desc">
+                  <ul>
+                    <li>Initial release with web research</li>
+                    <li>DuckDuckGo search integration</li>
+                    <li>Source citations</li>
+                    <li>Google OAuth authentication</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+          </section>
+
           <section class="set-pane" data-pane="about">
             <h3>Auralis</h3>
             <p class="set-note">A web research assistant that reads the live web, cites what it uses, and can run entirely on local models — no cloud AI account required.</p>
+            <div class="creator-section">
+              <div class="creator-label">Created by</div>
+              <div class="creator-name">Kean Bustos</div>
+            </div>
             <ul class="about-list">
               <li>🔬 Live web research with cited sources</li>
               <li>🧠 Local research · vision · speech models (opt-in downloads)</li>
               <li>📎 Images, audio, documents & links as context</li>
               <li>🛡️ Built-in prompt-injection guard</li>
+              <li>📊 Smart data queries with finance widgets</li>
+              <li>🧠 Persistent memory across chats</li>
             </ul>
           </section>
 

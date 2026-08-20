@@ -496,6 +496,82 @@ app.get('/api/user', (req, res) => {
     }
 });
 
+// Memory API endpoints
+app.get('/api/memories', async (req, res) => {
+    if (!req.isAuthenticated()) {
+        return res.status(401).json({ error: 'Not authenticated' });
+    }
+    try {
+        const memoryOwner = 'user:' + req.user.id;
+        const memories = await getMemories(memoryOwner);
+        res.json(memories);
+    } catch (err) {
+        console.error('Failed to fetch memories:', err);
+        res.status(500).json({ error: 'Failed to fetch memories' });
+    }
+});
+
+app.delete('/api/memories', async (req, res) => {
+    if (!req.isAuthenticated()) {
+        return res.status(401).json({ error: 'Not authenticated' });
+    }
+    try {
+        const memoryOwner = 'user:' + req.user.id;
+        const { index } = req.body;
+        
+        if (index !== undefined) {
+            // Delete specific memory by index
+            const memories = await getMemories(memoryOwner);
+            if (index >= 0 && index < memories.length) {
+                const keyword = memories[index].slice(0, 60);
+                await deleteMemories(memoryOwner, keyword);
+                res.json({ success: true });
+            } else {
+                res.status(400).json({ error: 'Invalid index' });
+            }
+        } else {
+            // Clear all memories
+            await deleteMemories(memoryOwner, '');
+            res.json({ success: true });
+        }
+    } catch (err) {
+        console.error('Failed to delete memories:', err);
+        res.status(500).json({ error: 'Failed to delete memories' });
+    }
+});
+
+// Image search endpoint
+app.get('/api/images', async (req, res) => {
+    const { q } = req.query;
+    if (!q || typeof q !== 'string' || !q.trim()) {
+        return res.status(400).json({ error: 'Query is required' });
+    }
+    
+    try {
+        // Use a simple image search approach - redirect to a search engine
+        // For now, we'll return placeholder URLs that link to image searches
+        const encodedQuery = encodeURIComponent(q.trim());
+        const images = [
+            {
+                title: `${q} - Image Search`,
+                url: `https://www.google.com/search?tbm=isch&q=${encodedQuery}`,
+                thumbnail: `https://via.placeholder.com/300x200/1a1a2e/7cf6ff?text=${encodedQuery}`,
+                source: 'Google Images'
+            },
+            {
+                title: `${q} - Bing Images`,
+                url: `https://www.bing.com/images/search?q=${encodedQuery}`,
+                thumbnail: `https://via.placeholder.com/300x200/1a1a2e/9b8cff?text=${encodedQuery}`,
+                source: 'Bing Images'
+            }
+        ];
+        res.json({ images });
+    } catch (err) {
+        console.error('Image search error:', err);
+        res.status(500).json({ error: 'Image search failed' });
+    }
+});
+
 app.post('/api/user/settings', async (req, res) => {
     // Retired: Gemini is no longer used; there is nothing meaningful to save.
     res.status(410).json({ error: 'No longer supported — Auralis now uses a local model.' });
@@ -611,6 +687,43 @@ const INTENTS = [
     { re: /\bwill|future|when\s+(will|is)|in\s+(20\d\d|the\s+future)/i, key: 'future' },
 ];
 function intentOf(q){ for (const it of INTENTS) if (it.re.test(q)) return it.key; return 'explain'; }
+
+// Extract finance/stock data from search results for display in widget
+function extractFinanceData(sources, query) {
+    if (!sources || sources.length === 0) return null;
+    
+    // Try to find stock price, market cap, and other key metrics
+    const text = sources.map(s => (s.body || s.snip || '')).join(' ').toLowerCase();
+    
+    // Common patterns for stock data
+    const priceMatch = text.match(/(?:price|trading at|currently at|is at)\s*[$€£]?\s*([\d,]+\.?\d*)/i);
+    const changeMatch = text.match(/(?:up|down|change|changed by)\s*[$€£]?\s*([\d,]+\.?\d*)\s*(?:\(([\d,]+\.?\d*)%\)\s*(?:today|today\s)?)/i);
+    const marketCapMatch = text.match(/market cap(?:italization)?\s*(?:of|:)?\s*[$€£]?\s*([\d,]+\.?\d*)\s*(billion|million|trillion)?/i);
+    const volumeMatch = text.match(/volume\s*(?:of|:)?\s*([\d,]+\.?\d*)\s*(million|billion|shares)?/i);
+    const highMatch = text.match(/(?:high|day high|session high)\s*(?:of|:)?\s*[$€£]?\s*([\d,]+\.?\d*)/i);
+    const lowMatch = text.match(/(?:low|day low|session low)\s*(?:of|:)?\s*[$€£]?\s*([\d,]+\.?\d*)/i);
+    
+    if (!priceMatch) return null;
+    
+    // Try to extract company name/ticker from query or sources
+    const tickerMatch = query.match(/([A-Z]{2,5})\s*stock/i) || text.match(/(?:ticker|symbol)\s*[:=]?\s*([A-Z]{2,5})/i);
+    const companyMatch = query.match(/(?:what is|what's)\s+(.+?)\s*stock/i) || 
+                          sources[0]?.title?.match(/^(.+?)\s*(?:stock|shares|corporation|inc\.?|ltd\.?)/i);
+    
+    return {
+        company: companyMatch ? companyMatch[1].trim() : null,
+        ticker: tickerMatch ? tickerMatch[1].toUpperCase() : null,
+        price: priceMatch ? parseFloat(priceMatch[1].replace(/,/g, '')) : null,
+        change: changeMatch ? parseFloat(changeMatch[1].replace(/,/g, '')) : null,
+        changePercent: changeMatch && changeMatch[2] ? parseFloat(changeMatch[2]) : null,
+        marketCap: marketCapMatch ? parseFloat(marketCapMatch[1].replace(/,/g, '')) : null,
+        marketCapUnit: marketCapMatch && marketCapMatch[2] ? marketCapMatch[2] : null,
+        volume: volumeMatch ? parseFloat(volumeMatch[1].replace(/,/g, '')) : null,
+        volumeUnit: volumeMatch && volumeMatch[2] ? volumeMatch[2] : null,
+        high: highMatch ? parseFloat(highMatch[1].replace(/,/g, '')) : null,
+        low: lowMatch ? parseFloat(lowMatch[1].replace(/,/g, '')) : null,
+    };
+}
 
 // Simple lookups ("who is X?", "what is Y?") deserve a chat-style answer:
 // 1–3 friendly sentences with a citation — not a full research report. The
@@ -1131,10 +1244,18 @@ GREETINGS & SMALL TALK EXCEPTION: If the user's question is a simple greeting, s
 
         // Return combined data to the frontend (strip body before sending)
         const sourcesForClient = searchResults.map(({ body, ...rest }) => rest);
+        
+        // Extract finance data if this was a data/finance query
+        let financeData = null;
+        if (intent === 'data' && /stock|price|trading|market cap/i.test(trimmed)) {
+            financeData = extractFinanceData(searchResults, trimmed);
+        }
+        
         sendResult({
             sources: sourcesForClient,
             text: synthesizedText,
             model: modelUsed,
+            financeData: financeData,
         });
         
     } catch (error) {

@@ -325,6 +325,213 @@ body.ready .composer{animation:shellRise .6s .2s var(--ease) both}
 .msg.ai .body:hover ~ .actions,.actions:hover,.msg.ai .body:hover .actions{opacity:1}
 .act{padding:5px 8px;border-radius:8px;font-size:11px;color:var(--text-faint);display:flex;align-items:center;gap:4px;transition:.15s}
 .act:hover{background:rgba(255,255,255,.07);color:var(--text)}
+
+/* ---------- Finance Card Widget ---------- */
+.finance-card{
+  background:linear-gradient(135deg, rgba(124,246,255,.08) 0%, rgba(155,140,255,.08) 100%);
+  border:1px solid rgba(124,246,255,.18);
+  border-radius:12px;
+  padding:14px 16px;
+  margin-bottom:12px;
+  animation:fcIn .4s var(--spring) both;
+}
+@keyframes fcIn{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:none}}
+.fc-header{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  margin-bottom:8px;
+}
+.fc-company{
+  display:flex;
+  align-items:center;
+  gap:8px;
+}
+.fc-name{
+  font-family:'Space Grotesk';
+  font-weight:600;
+  font-size:14px;
+  color:var(--text);
+}
+.fc-ticker{
+  font-family:'JetBrains Mono';
+  font-size:11px;
+  padding:3px 7px;
+  background:rgba(124,246,255,.12);
+  border-radius:5px;
+  color:var(--cyan);
+  font-weight:500;
+}
+.fc-price{
+  font-family:'Space Grotesk';
+  font-weight:700;
+  font-size:18px;
+  color:var(--text);
+}
+.fc-change{
+  font-family:'Space Grotesk';
+  font-weight:600;
+  font-size:13px;
+  margin-bottom:8px;
+}
+.fc-extra{
+  display:grid;
+  grid-template-columns:repeat(auto-fit, minmax(140px, 1fr));
+  gap:6px;
+  padding-top:8px;
+  border-top:1px solid rgba(255,255,255,.07);
+}
+.fc-row{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+}
+.fc-label{
+  font-size:11px;
+  color:var(--text-dim);
+}
+.fc-value{
+  font-family:'JetBrains Mono';
+  font-size:12px;
+  color:var(--text);
+  font-weight:500;
+}
+
+/* ---------- Memory Tab ---------- */
+.memory-list{
+  max-height:300px;
+  overflow-y:auto;
+  margin:12px 0;
+  padding:8px;
+  background:rgba(0,0,0,.2);
+  border-radius:8px;
+  border:1px solid var(--border);
+}
+.memory-empty{
+  text-align:center;
+  padding:20px;
+  color:var(--text-dim);
+  font-size:13px;
+}
+.memory-item{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  padding:8px 10px;
+  border-bottom:1px solid var(--border);
+  font-size:13px;
+}
+.memory-item:last-child{border-bottom:none}
+.memory-text{
+  flex:1;
+  color:var(--text);
+}
+.memory-delete{
+  padding:4px 8px;
+  font-size:11px;
+  color:var(--text-faint);
+  border-radius:6px;
+  transition:.15s;
+}
+.memory-delete:hover{
+  background:rgba(255,71,87,.15);
+  color:#ff4757;
+}
+
+/* ---------- Skills Tab ---------- */
+.skills-grid{
+  display:grid;
+  grid-template-columns:repeat(auto-fill, minmax(200px, 1fr));
+  gap:12px;
+  margin:12px 0;
+}
+.skill-card{
+  background:rgba(255,255,255,.04);
+  border:1px solid var(--border);
+  border-radius:10px;
+  padding:14px;
+  transition:.2s var(--ease);
+}
+.skill-card:hover{
+  background:rgba(255,255,255,.07);
+  border-color:rgba(124,246,255,.3);
+  transform:translateY(-2px);
+}
+.skill-icon{
+  font-size:24px;
+  margin-bottom:8px;
+}
+.skill-name{
+  font-family:'Space Grotesk';
+  font-weight:600;
+  font-size:14px;
+  color:var(--text);
+  margin-bottom:4px;
+}
+.skill-desc{
+  font-size:12px;
+  color:var(--text-dim);
+  line-height:1.5;
+}
+
+/* ---------- Updates Tab ---------- */
+.updates-list{
+  max-height:300px;
+  overflow-y:auto;
+  margin:12px 0;
+}
+.update-item{
+  padding:12px;
+  border-bottom:1px solid var(--border);
+}
+.update-item:last-child{border-bottom:none}
+.update-version{
+  font-family:'Space Grotesk';
+  font-weight:700;
+  font-size:14px;
+  color:var(--cyan);
+}
+.update-date{
+  font-size:11px;
+  color:var(--text-faint);
+  margin:2px 0 6px;
+}
+.update-desc{
+  font-size:13px;
+  color:var(--text-dim);
+  line-height:1.6;
+}
+.update-desc ul{
+  margin:6px 0 0;
+  padding-left:18px;
+}
+.update-desc li{
+  margin:4px 0;
+}
+
+/* ---------- Creator Section ---------- */
+.creator-section{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  margin:16px 0;
+  padding:12px;
+  background:linear-gradient(135deg, rgba(124,246,255,.1) 0%, rgba(155,140,255,.1) 100%);
+  border:1px solid rgba(124,246,255,.2);
+  border-radius:10px;
+}
+.creator-label{
+  font-size:12px;
+  color:var(--text-dim);
+  text-transform:uppercase;
+  letter-spacing:.05em;
+}
+.creator-name{
+  font-family:'Space Grotesk';
+  font-weight:700;
+  font-size:16px;
+  color:var(--text);
+}
 .act svg{stroke:currentColor}
 
 /* ---------- Composer ---------- */
