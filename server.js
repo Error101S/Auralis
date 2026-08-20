@@ -445,34 +445,55 @@ passport.deserializeUser(async (id, done) => {
     }
 });
 
-// Configure Google Strategy
-passport.use(new GoogleStrategy({
-    clientID: process.env.GOOGLE_CLIENT_ID || 'missing_client_id',
-    clientSecret: process.env.GOOGLE_CLIENT_SECRET || 'missing_client_secret',
-    callbackURL: "/auth/google/callback"
-  },
-  async (accessToken, refreshToken, profile, done) => {
-      try {
-          const user = await findOrCreateUser(profile);
-          return done(null, user);
-      } catch (err) {
-          return done(err, null);
+// Configure Google Strategy (only if credentials are provided)
+if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET &&
+    process.env.GOOGLE_CLIENT_ID !== 'missing_client_id' &&
+    process.env.GOOGLE_CLIENT_SECRET !== 'missing_client_secret') {
+    passport.use(new GoogleStrategy({
+        clientID: process.env.GOOGLE_CLIENT_ID,
+        clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+        callbackURL: "/auth/google/callback"
+      },
+      async (accessToken, refreshToken, profile, done) => {
+          try {
+              const user = await findOrCreateUser(profile);
+              return done(null, user);
+          } catch (err) {
+              return done(err, null);
+          }
       }
-  }
-));
+    ));
+}
 
 // Auth Routes
-app.get('/auth/google',
-  passport.authenticate('google', { scope: ['profile', 'email'] })
-);
+app.get('/auth/google', (req, res) => {
+    if (!process.env.GOOGLE_CLIENT_ID || process.env.GOOGLE_CLIENT_ID === 'missing_client_id') {
+        // OAuth not configured - show friendly message
+        res.send(`
+            <html>
+            <head><title>Authentication Not Configured</title></head>
+            <body style="font-family: sans-serif; max-width: 600px; margin: 100px auto; padding: 20px; text-align: center;">
+                <h1>Authentication Not Configured</h1>
+                <p>Google OAuth is not set up for this instance of Auralis.</p>
+                <p>You can still use all features without signing in. Memories will be stored locally in your browser.</p>
+                <p><a href="/" style="color: #7cf6ff;">Return to Auralis</a></p>
+            </body>
+            </html>
+        `);
+        return;
+    }
+    passport.authenticate('google', { scope: ['profile', 'email'] })(req, res);
+});
 
-app.get('/auth/google/callback', 
-  passport.authenticate('google', { failureRedirect: '/' }),
-  (req, res) => {
+app.get('/auth/google/callback', (req, res, next) => {
+    if (!process.env.GOOGLE_CLIENT_ID || process.env.GOOGLE_CLIENT_ID === 'missing_client_id') {
+        return res.redirect('/');
+    }
+    passport.authenticate('google', { failureRedirect: '/' })(req, res, next);
+}, (req, res) => {
     // Successful authentication, redirect home.
     res.redirect('/');
-  }
-);
+});
 
 app.get('/auth/logout', (req, res) => {
     req.logout(() => {
@@ -492,7 +513,12 @@ app.get('/api/user', (req, res) => {
             }
         });
     } else {
-        res.json({ loggedIn: false });
+        res.json({ 
+            loggedIn: false,
+            authAvailable: !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET &&
+                            process.env.GOOGLE_CLIENT_ID !== 'missing_client_id' &&
+                            process.env.GOOGLE_CLIENT_SECRET !== 'missing_client_secret')
+        });
     }
 });
 

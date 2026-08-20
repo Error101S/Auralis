@@ -436,9 +436,17 @@ async function checkAuthStatus(){
       userBtn.hidden = false;
       if (authPrompt) authPrompt.hidden = true;
     } else {
-      authBtn.hidden = false;
-      userBtn.hidden = true;
-      if (authPrompt) authPrompt.hidden = false;
+      // Only show auth UI if authentication is actually available
+      if (data.authAvailable) {
+        authBtn.hidden = false;
+        userBtn.hidden = true;
+        if (authPrompt) authPrompt.hidden = false;
+      } else {
+        // Hide auth UI when OAuth is not configured
+        authBtn.hidden = true;
+        userBtn.hidden = true;
+        if (authPrompt) authPrompt.hidden = true;
+      }
     }
   } catch (err) {
     console.error('Failed to check auth status:', err);
@@ -472,7 +480,11 @@ async function loadMemories(){
     if (!res.ok) return;
     const data = await res.json();
     if (!data.loggedIn) {
-      memoryList.innerHTML = '<div class="memory-empty">Sign in to view and manage your memories.</div>';
+      if (!data.authAvailable) {
+        memoryList.innerHTML = '<div class="memory-empty">Authentication is not configured. Memories can be stored locally in your browser in a future update.</div>';
+      } else {
+        memoryList.innerHTML = '<div class="memory-empty">Sign in to view and manage your memories.</div>';
+      }
       return;
     }
     // Fetch memories from server
