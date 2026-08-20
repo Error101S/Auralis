@@ -426,18 +426,32 @@ function renderAI(m){
 function renderBoth(){ renderSidebar(); renderMessages(); toggleSendBtn(); }
 
 /* ---------- Auth UI ---------- */
+let authAvailable = false;
+let isLoggedIn = false;
+
 async function checkAuthStatus(){
   try {
     const res = await fetch('/api/user');
     if (!res.ok) return;
     const data = await res.json();
-    if (data.loggedIn) {
+    authAvailable = data.authAvailable || false;
+    isLoggedIn = data.loggedIn || false;
+    
+    if (isLoggedIn) {
       authBtn.hidden = true;
       userBtn.hidden = false;
       if (authPrompt) authPrompt.hidden = true;
+      // Update user button to show logout option
+      if (userBtn) {
+        userBtn.innerHTML = `
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+          <span class="auth-text">Sign out</span>
+        `;
+        userBtn.classList.add('auth-btn');
+      }
     } else {
       // Only show auth UI if authentication is actually available
-      if (data.authAvailable) {
+      if (authAvailable) {
         authBtn.hidden = false;
         userBtn.hidden = true;
         if (authPrompt) authPrompt.hidden = false;
@@ -448,45 +462,82 @@ async function checkAuthStatus(){
         if (authPrompt) authPrompt.hidden = true;
       }
     }
+    
+    // Update feature availability based on auth status
+    updateFeatureAvailability();
   } catch (err) {
     console.error('Failed to check auth status:', err);
+    // On error, hide auth UI
+    authBtn.hidden = true;
+    userBtn.hidden = true;
+    if (authPrompt) authPrompt.hidden = true;
+  }
+}
+
+function updateFeatureAvailability(){
+  // Memory tab - require auth
+  const memoryTab = document.querySelector('.set-tab[data-tab="memory"]');
+  if (memoryTab) {
+    if (!authAvailable || !isLoggedIn) {
+      memoryTab.classList.add('disabled');
+      memoryTab.title = 'Sign in to use memory features';
+    } else {
+      memoryTab.classList.remove('disabled');
+      memoryTab.title = '';
+    }
   }
 }
 
 if (authBtn) {
-  authBtn.addEventListener('click', () => {
-    window.location.href = '/auth/google';
+  authBtn.addEventListener('click', (e) => {
+    e.preventDefault();
+    if (authAvailable) {
+      window.location.href = '/auth/google';
+    } else {
+      toast('Authentication is not configured. You can still use all features without signing in!', 'info');
+    }
   });
 }
 
 if (emptyAuthBtn) {
   emptyAuthBtn.addEventListener('click', () => {
-    window.location.href = '/auth/google';
+    if (authAvailable) {
+      window.location.href = '/auth/google';
+    } else {
+      // Hide the auth prompt since auth isn't available
+      if (authPrompt) authPrompt.hidden = true;
+      toast('Authentication is not configured. You can still use all features without signing in!', 'info');
+    }
   });
 }
 
 if (userBtn) {
   userBtn.addEventListener('click', () => {
-    // Show user menu or go to settings
-    openSettings('about');
+    if (isLoggedIn) {
+      // Sign out
+      window.location.href = '/auth/logout';
+    } else {
+      // Show user menu or go to settings
+      openSettings('about');
+    }
   });
 }
 
 /* ---------- Memory Tab ---------- */
 async function loadMemories(){
   if (!memoryList) return;
+  
+  if (!authAvailable) {
+    memoryList.innerHTML = '<div class="memory-empty">Authentication is not configured. Memories can be stored locally in your browser in a future update.</div>';
+    return;
+  }
+  
+  if (!isLoggedIn) {
+    memoryList.innerHTML = '<div class="memory-empty">Sign in to view and manage your memories.</div>';
+    return;
+  }
+  
   try {
-    const res = await fetch('/api/user');
-    if (!res.ok) return;
-    const data = await res.json();
-    if (!data.loggedIn) {
-      if (!data.authAvailable) {
-        memoryList.innerHTML = '<div class="memory-empty">Authentication is not configured. Memories can be stored locally in your browser in a future update.</div>';
-      } else {
-        memoryList.innerHTML = '<div class="memory-empty">Sign in to view and manage your memories.</div>';
-      }
-      return;
-    }
     // Fetch memories from server
     const memRes = await fetch('/api/memories');
     if (!memRes.ok) {
@@ -2165,7 +2216,9 @@ function openSettings(tab){
   else { const active = settingsWrap.querySelector('.set-tab.active'); if (active) activateSettingsTab(active.dataset.tab); }
   // Load memories if memory tab is opened
   if (tab === 'memory' || (!tab && settingsWrap.querySelector('.set-tab.active')?.dataset.tab === 'memory')) {
-    loadMemories();
+    if (authAvailable && isLoggedIn) {
+      loadMemories();
+    }
   }
 }
 function closeSettings(){ settingsWrap.hidden = true; }
@@ -2178,8 +2231,12 @@ document.getElementById('settingsClose').addEventListener('click', closeSettings
 settingsWrap.addEventListener('mousedown',(e)=>{ if (e.target === settingsWrap) closeSettings(); });
 settingsWrap.querySelectorAll('.set-tab').forEach(b=>{
   b.addEventListener('click', ()=>{
+    if (b.classList.contains('disabled')) {
+      toast('Sign in to use this feature', 'error');
+      return;
+    }
     activateSettingsTab(b.dataset.tab);
-    if (b.dataset.tab === 'memory') loadMemories();
+    if (b.dataset.tab === 'memory' && authAvailable && isLoggedIn) loadMemories();
   });
 });
 document.addEventListener('keydown',(e)=>{

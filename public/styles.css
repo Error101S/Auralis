@@ -600,6 +600,16 @@ body.ready .composer{animation:shellRise .6s .2s var(--ease) both}
   font-size:16px;
   color:var(--text);
 }
+
+/* ---------- Disabled Tab State ---------- */
+.set-tab.disabled{
+  opacity:0.4;
+  cursor:not-allowed;
+}
+.set-tab.disabled:hover{
+  background:none;
+  cursor:not-allowed;
+}
 .act svg{stroke:currentColor}
 
 /* ---------- Composer ---------- */
