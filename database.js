@@ -16,6 +16,36 @@ const db = new sqlite3.Database(dbPath, (err) => {
     }
 });
 
+// Graceful shutdown handling
+process.on('SIGINT', () => {
+    db.close((err) => {
+        if (err) {
+            console.error('Error closing database:', err.message);
+        } else {
+            console.log('Database connection closed');
+        }
+        process.exit(0);
+    });
+});
+
+process.on('SIGTERM', () => {
+    db.close((err) => {
+        if (err) {
+            console.error('Error closing database:', err.message);
+        } else {
+            console.log('Database connection closed');
+        }
+        process.exit(0);
+    });
+});
+
+// Periodic session cleanup to prevent database bloat
+setInterval(() => {
+    db.run('DELETE FROM sessions WHERE expire < ?', [Date.now()], (err) => {
+        if (err) console.error('Session cleanup failed:', err.message);
+    });
+}, 24 * 60 * 60 * 1000); // Clean up expired sessions daily
+
 // Create tables if they don't exist
 db.serialize(() => {
     db.run(`

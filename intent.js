@@ -347,6 +347,11 @@ export function creativeReply(query) {
 
 const CURRENT_RE = /\b(latest|today|yesterday|tonight|this week|this month|this year|this quarter|current|breaking|recent|newest|news|weather|forecast|score|scores|election|announc|trending|what happened|status of|right now|price|prices|stock|stocks|shares|market|revenue|earnings|release|released|out now|just came out|update|updates|next week|upcoming)\b/i;
 
+// Enhanced patterns for data/finance queries - these need specific, factual answers
+const DATA_QUERY_RE = /\b(stock|stocks|price|pricing|cost|value|valuation|market cap|market capitalization|dividend|yield|eps|earnings per share|pe ratio|volume|trading|ticker|symbol|exchange|nasdaq|nyse|dow jones|s&p 500|sp 500|crypto|bitcoin|ethereum|btc|eth|currency|exchange rate|interest rate|inflation|gdp|unemployment|sales|revenue|profit|loss|balance sheet|cash flow)\b/i;
+
+const FINANCE_SPECIFIC_RE = /\b(what (is|are|'s) .* (stock|price|trading at|worth|valued at)|how (much|many) (is|are) .* worth|current (price|stock|value) of|stock price of|market cap of|ticker for|symbol for|shares of)\b/i;
+
 const FUTURE_RE = /\b(will|future|predict|prediction|outlook|projection|forecast|when (will|is|does))\b/i;
 
 const RESEARCH_RE = /\b(why|how (do|does|can|is|to|are|much|many)|compare|comparison|versus|vs\.?|difference between|better|worst|best|top \d+|recommend|should i|worth it|analysis|analy[sz]e|investigat|research|deep dive|history of|impact of|effect of|pros and cons|review|tutorial|guide|explain|break down|factors|reasons|causes|statistics|data on|evidence for|sources on|studies|survey|growth|profits?|sales|industry|robinhood?)\b/i;
@@ -443,6 +448,12 @@ export function detectIntent(query, history) {
     if (isCasual(q)) return 'casual';
     if (isCalculation(q)) return 'calculation';
     if (isCreative(q)) return 'creative';
+    
+    // Check for finance/data queries first - these need specific factual answers
+    if (DATA_QUERY_RE.test(q) || FINANCE_SPECIFIC_RE.test(q)) {
+        return 'data';
+    }
+    
     if (CURRENT_RE.test(q) || FUTURE_RE.test(q)) return 'current';
     if (RESEARCH_RE.test(q)) return 'research';
     if (KNOWLEDGE_RE.test(q)) return 'knowledge';

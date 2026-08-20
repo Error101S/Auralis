@@ -8,6 +8,7 @@ import session from 'express-session';
 import passport from 'passport';
 import { Strategy as GoogleStrategy } from 'passport-google-oauth20';
 import { findOrCreateUser, getUserById, getMemories, addMemory, deleteMemories, logMessage, getRecentChat, SqliteSessionStore } from './database.js';
+import db from './database.js';
 import { detectIntent, casualReply, solveCalculation, creativeReply, expandQuery, systemReply, memoryCommand, extractFacts } from './intent.js';
 import { Readability } from '@mozilla/readability';
 import { parseHTML } from 'linkedom';
@@ -53,24 +54,28 @@ async function geminiStreamGenerate({ apiKey, system = '', userPrompt, inlinePar
     const reader = res.body.getReader();
     const dec = new TextDecoder();
     let buf = '', full = '';
-    while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += dec.decode(value, { stream: true });
-        let nl;
-        while ((nl = buf.indexOf('\n')) >= 0) {
-            const line = buf.slice(0, nl).trim();
-            buf = buf.slice(nl + 1);
-            if (!line.startsWith('data:')) continue;
-            const data = line.slice(5).trim();
-            if (!data || data === '[DONE]') continue;
-            try {
-                const j = JSON.parse(data);
-                const parts = j?.candidates?.[0]?.content?.parts || [];
-                const piece = parts.map(p => p.text || '').join('');
-                if (piece) { full += piece; onToken(piece); }
-            } catch {}
+    try {
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buf += dec.decode(value, { stream: true });
+            let nl;
+            while ((nl = buf.indexOf('\n')) >= 0) {
+                const line = buf.slice(0, nl).trim();
+                buf = buf.slice(nl + 1);
+                if (!line.startsWith('data:')) continue;
+                const data = line.slice(5).trim();
+                if (!data || data === '[DONE]') continue;
+                try {
+                    const j = JSON.parse(data);
+                    const parts = j?.candidates?.[0]?.content?.parts || [];
+                    const piece = parts.map(p => p.text || '').join('');
+                    if (piece) { full += piece; onToken(piece); }
+                } catch {}
+            }
         }
+    } finally {
+        reader.releaseLock();
     }
     if (!full.trim()) throw new Error('Gemini returned an empty response');
     return full;
@@ -209,11 +214,11 @@ const PAGE_FETCH_TIMEOUT_MS = 6000;
 const PAGE_MAX_CHARS = 2500;
 
 async function fetchPageText(url) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), PAGE_FETCH_TIMEOUT_MS);
     try {
         // Skip obviously-unfetchable or placeholder URLs.
         if (!url || /^(https?:)?\/\/(example\.com|localhost)/i.test(url)) return null;
-        const ctrl = new AbortController();
-        const timer = setTimeout(() => ctrl.abort(), PAGE_FETCH_TIMEOUT_MS);
         const r = await fetch(url, {
             signal: ctrl.signal,
             headers: {
@@ -223,7 +228,6 @@ async function fetchPageText(url) {
             },
             redirect: 'follow',
         });
-        clearTimeout(timer);
         if (!r.ok) return null;
         const ct = r.headers.get('content-type') || '';
         if (!/text\/html|application\/xhtml|text\/plain|\*\/\*/.test(ct)) return null;
@@ -251,6 +255,8 @@ async function fetchPageText(url) {
         return text.slice(0, PAGE_MAX_CHARS);
     } catch {
         return null;
+    } finally {
+        clearTimeout(timer);
     }
 }
 
@@ -282,9 +288,9 @@ async function enrichSources(searchResults, { limit: maxSources = 4, onRead = nu
 const DDG_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
 async function ddgHtmlSearch(query, { limit = 6 } = {}) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 10000);
     try {
-        const ctrl = new AbortController();
-        const timer = setTimeout(() => ctrl.abort(), 10000);
         const r = await fetch('https://html.duckduckgo.com/html/', {
             method: 'POST',
             signal: ctrl.signal,
@@ -297,7 +303,6 @@ async function ddgHtmlSearch(query, { limit = 6 } = {}) {
             body: new URLSearchParams({ q: query, kl: 'us-en' }).toString(),
             redirect: 'follow',
         });
-        clearTimeout(timer);
         if (!r.ok) return [];
         const html = await r.text();
         if (!html || html.length < 500) return [];
@@ -322,15 +327,17 @@ async function ddgHtmlSearch(query, { limit = 6 } = {}) {
         return out;
     } catch {
         return [];
+    } finally {
+        clearTimeout(timer);
     }
 }
 
 // Third search fallback: DuckDuckGo Lite (GET, different endpoint, different
 // rate-limit bucket than the HTML one).
 async function ddgLiteSearch(query, { limit = 6 } = {}) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 10000);
     try {
-        const ctrl = new AbortController();
-        const timer = setTimeout(() => ctrl.abort(), 10000);
         const r = await fetch('https://lite.duckduckgo.com/lite/?q=' + encodeURIComponent(query), {
             signal: ctrl.signal,
             headers: {
@@ -340,7 +347,6 @@ async function ddgLiteSearch(query, { limit = 6 } = {}) {
             },
             redirect: 'follow',
         });
-        clearTimeout(timer);
         if (!r.ok) return [];
         const html = await r.text();
         if (!html || html.length < 300) return [];
@@ -367,6 +373,8 @@ async function ddgLiteSearch(query, { limit = 6 } = {}) {
         return out;
     } catch {
         return [];
+    } finally {
+        clearTimeout(timer);
     }
 }
 
@@ -375,22 +383,20 @@ async function ddgLiteSearch(query, { limit = 6 } = {}) {
 // local model's training data may not know and web search may have missed.
 // Returns a source-shaped {title,url,snip,body}.
 async function wikipediaLookup(query) {
+    const srCtrl = new AbortController();
+    const srTimer = setTimeout(() => srCtrl.abort(), 6000);
+    const prCtrl = new AbortController();
+    const prTimer = setTimeout(() => prCtrl.abort(), 6000);
     try {
         const api = 'https://en.wikipedia.org/w/api.php';
         const headers = { 'User-Agent': 'Auralis/1.0 (research assistant)' };
-        const srCtrl = new AbortController();
-        const srTimer = setTimeout(() => srCtrl.abort(), 6000);
         const sr = await fetch(`${api}?action=query&list=search&srsearch=${encodeURIComponent(query)}&srlimit=3&format=json&origin=*`, { headers, signal: srCtrl.signal });
-        clearTimeout(srTimer);
         if (!sr.ok) return null;
         const sj = await sr.json();
         const hits = (sj?.query?.search || []).filter(h => h && h.title);
         if (!hits.length) return null;
         const title = hits[0].title;
-        const prCtrl = new AbortController();
-        const prTimer = setTimeout(() => prCtrl.abort(), 6000);
         const pr = await fetch(`${api}?action=query&prop=extracts|info&exintro=1&explaintext=1&inprop=url&redirects=1&titles=${encodeURIComponent(title)}&format=json&origin=*`, { headers, signal: prCtrl.signal });
-        clearTimeout(prTimer);
         if (!pr.ok) return null;
         const pj = await pr.json();
         const pages = pj?.query?.pages || {};
@@ -406,6 +412,9 @@ async function wikipediaLookup(query) {
         };
     } catch {
         return null;
+    } finally {
+        clearTimeout(srTimer);
+        clearTimeout(prTimer);
     }
 }
 
@@ -684,7 +693,12 @@ app.post('/api/search', async (req, res) => {
     const sendResult = (obj) => {
         if (wantStream) {
             if (!streamStarted) { streamStarted = true; res.setHeader('Content-Type', 'application/x-ndjson'); }
-            try { res.write(JSON.stringify(Object.assign({ t: 'result' }, obj)) + '\n'); res.end(); } catch { try { res.end(); } catch {} }
+            try { 
+                res.write(JSON.stringify(Object.assign({ t: 'result' }, obj)) + '\n'); 
+                res.end(); 
+            } catch (e) { 
+                try { res.end(); } catch {} 
+            }
         } else {
             res.json(obj);
         }
@@ -874,7 +888,23 @@ app.post('/api/search', async (req, res) => {
             }
         }
         const searchBase = links.length ? trimmed.replace(/https?:\/\/[^\s)\]}>,]+/g, ' ').replace(/\s+/g, ' ').trim() : trimmed;
-        const searchQuery = expandQuery(searchBase, history);
+        
+        // Optimize search query for data/finance intents to get current factual data
+        let optimizedQuery = searchBase;
+        if (intent === 'data') {
+            if (/stock|price|trading|market cap/i.test(trimmed)) {
+                optimizedQuery = searchBase + ' stock price today current market data';
+            } else if (/weather|forecast/i.test(trimmed)) {
+                optimizedQuery = searchBase + ' current weather forecast today';
+            } else if (/score|scores|game/i.test(trimmed)) {
+                optimizedQuery = searchBase + ' current score live today';
+            } else {
+                optimizedQuery = searchBase + ' current data latest information';
+            }
+        }
+        
+        // Use optimized query for data/finance intents, otherwise expand normally
+        const searchQuery = intent === 'data' ? optimizedQuery : expandQuery(searchBase, history);
         let synthesizedText = "I couldn't generate a response.";
         let modelUsed = '';
         let searchResults = [];
@@ -1031,9 +1061,12 @@ ANSWER QUALITY RULES — follow every rule that applies:
 
 1. ANSWER DIRECTLY. Lead with the most useful information. Do not restate the question, do not open with "Based on my research", "According to the sources", or "Here's what I found", and do not pad with filler or throat-clearing.
 
-2. SYNTHESIZE, DON'T SUMMARIZE. Combine evidence from multiple sources into one coherent explanation. Do not walk through sources one at a time. Identify relationships: causes, effects, context, significance, and what the facts imply together. Prioritize the strongest, most relevant evidence over weaker or tangential material.
+2. BE DIRECT WITH NUMBERS AND DATA. When the user asks for factual data (stock prices, weather, scores, statistics, financial metrics), state the numbers clearly and immediately. Do not talk around the data. For example: "Roblox is trading at $38.69" not "Roblox is a company that has seen its stock price move to around $38.69." Always specify the currency, units, and timeframe when known.
 
-3. STRUCTURE TO THE QUESTION — pick the format the question calls for:
+3. SYNTHESIZE, DON'T SUMMARIZE. Combine evidence from multiple sources into one coherent explanation. Do not walk through sources one at a time. Identify relationships: causes, effects, context, significance, and what the facts imply together. Prioritize the strongest, most relevant evidence over weaker or tangential material.
+
+4. STRUCTURE TO THE QUESTION — pick the format the question calls for:
+   - Data/finance questions: lead with the key numbers (price, change, volume, etc.) in a clear sentence, then add context.
    - Simple/factual questions: answer in a short paragraph, then the supporting context.
    - "Why" questions: explain the important causes and how they interact.
    - "How"/process questions: clear steps in logical order.
@@ -1044,19 +1077,19 @@ ANSWER QUALITY RULES — follow every rule that applies:
    - Complex research requests: organize into clear sections with "###" headings and synthesize into a coherent report.
    Use only "###" headings, **bold**, "- " bullets, "1. " numbered steps, and "|" pipe tables. Do not force every answer into the same structure.
 
-4. MATCH LENGTH TO DEPTH. Simple question → a few sentences. Moderate research question → a short, well-organized answer. Complex research request → a detailed, organized report. Never inflate a simple answer.
+5. MATCH LENGTH TO DEPTH. Simple question → a few sentences. Moderate research question → a short, well-organized answer. Complex research request → a detailed, organized report. Never inflate a simple answer.
 
-5. CITE PRECISELY. Place citations like [1] or [2,3] immediately after the claim they support, woven into the sentence — never dump all citations at the end without context. Cite only sources that genuinely support the claim; when several sources substantiate an important claim, cite the relevant ones. Never cite a source for something it does not say, and never cite a source that is not in the numbered list. If sources disagree, say so plainly and indicate which position is better supported, more recent, or more authoritative. When a claim is grounded in only a snippet (weak) versus full content, discount accordingly.
+6. CITE PRECISELY. Place citations like [1] or [2,3] immediately after the claim they support, woven into the sentence — never dump all citations at the end without context. Cite only sources that genuinely support the claim; when several sources substantiate an important claim, cite the relevant ones. Never cite a source for something it does not say, and never cite a source that is not in the numbered list. If sources disagree, say so plainly and indicate which position is better supported, more recent, or more authoritative. When a claim is grounded in only a snippet (weak) versus full content, discount accordingly.
 
-6. SEPARATE FACT FROM INTERPRETATION. Present directly supported facts plainly, with citations. Frame reasonable inference as analysis ("This suggests…", "The pattern points to…"), not as established fact. Flag genuinely uncertain or disputed material as uncertain. Never invent facts, statistics, quotes, or predictions.
+7. SEPARATE FACT FROM INTERPRETATION. Present directly supported facts plainly, with citations. Frame reasonable inference as analysis ("This suggests…", "The pattern points to…"), not as established fact. Flag genuinely uncertain or disputed material as uncertain. Never invent facts, statistics, quotes, or predictions.
 
-7. WEIGH SOURCE QUALITY. Prefer authoritative sources — government, academic and peer-reviewed material, official documentation, company filings, primary documents, and established news organizations — over blogs, forums, and aggregators. When the material contains conflicting quality, rely on the stronger sources and say why when it matters.
+8. WEIGH SOURCE QUALITY. Prefer authoritative sources — government, academic and peer-reviewed material, official documentation, company filings, primary documents, and established news organizations — over blogs, forums, and aggregators. When the material contains conflicting quality, rely on the stronger sources and say why when it matters.
 
-8. BE HONEST ABOUT GAPS. If the material does not adequately answer the question, say so directly and explain what information is missing or what would be needed to answer fully. Do not fabricate to fill the gap; do not pad with genericities.
+9. BE HONEST ABOUT GAPS. If the material does not adequately answer the question, say so directly and explain what information is missing or what would be needed to answer fully. Do not fabricate to fill the gap; do not pad with genericities.
 
-9. NATURAL LANGUAGE. Write like a knowledgeable analyst — direct, specific, and natural. Avoid AI filler ("It's important to note…", "In conclusion…", "This is a complex topic…", "As an AI…", "According to sources…"). Do NOT end every answer with an offer or a follow-up question. Only ask a follow-up if the user's question genuinely requires clarification or has materially different valid interpretations.
+10. NATURAL LANGUAGE. Write like a knowledgeable analyst — direct, specific, and natural. Avoid AI filler ("It's important to note…", "In conclusion…", "This is a complex topic…", "As an AI…", "According to sources…"). Do NOT end every answer with an offer or a follow-up question. Only ask a follow-up if the user's question genuinely requires clarification or has materially different valid interpretations.
 
-10. NO COPYING. Express everything in your own words. Never reproduce long passages from any source.
+11. NO COPYING. Express everything in your own words. Never reproduce long passages from any source.
 
 GREETINGS & SMALL TALK EXCEPTION: If the user's question is a simple greeting, small talk, or basic chatter (not a research request), respond warmly and concisely in 1–2 sentences. No citations, no analysis of the term itself, no research framing.`;
 
@@ -1106,8 +1139,17 @@ GREETINGS & SMALL TALK EXCEPTION: If the user's question is a simple greeting, s
         
     } catch (error) {
         console.error('API Error:', error);
-        if (!res.headersSent) res.status(500).json({ error: error.message });
-        else { try { res.write(JSON.stringify({ t: 'result', error: error.message }) + '\n'); res.end(); } catch {} }
+        if (!res.headersSent) {
+            res.status(500).json({ error: error.message });
+        } else {
+            try {
+                res.write(JSON.stringify({ t: 'result', error: error.message }) + '\n');
+                res.end();
+            } catch (e) {
+                // Response already ended or closed
+                try { res.end(); } catch {}
+            }
+        }
     }
 });
 
