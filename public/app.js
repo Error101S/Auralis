@@ -450,15 +450,24 @@ async function checkAuthStatus(){
         userBtn.classList.add('auth-btn');
       }
     } else {
-      // Only show auth UI if authentication is actually available
+      // Always show auth button for sign-in, even if OAuth not configured
+      authBtn.hidden = false;
+      userBtn.hidden = true;
+      // Update button text based on auth availability
+      const authText = authBtn.querySelector('.auth-text');
+      if (authText) {
+        if (authAvailable) {
+          authText.textContent = 'Sign in';
+          authBtn.classList.remove('auth-unavailable');
+        } else {
+          authText.textContent = 'Sign in';
+          authBtn.classList.add('auth-unavailable');
+        }
+      }
+      // Show auth prompt only if OAuth is available
       if (authAvailable) {
-        authBtn.hidden = false;
-        userBtn.hidden = true;
         if (authPrompt) authPrompt.hidden = false;
       } else {
-        // Hide auth UI when OAuth is not configured
-        authBtn.hidden = true;
-        userBtn.hidden = true;
         if (authPrompt) authPrompt.hidden = true;
       }
     }
@@ -467,8 +476,8 @@ async function checkAuthStatus(){
     updateFeatureAvailability();
   } catch (err) {
     console.error('Failed to check auth status:', err);
-    // On error, hide auth UI
-    authBtn.hidden = true;
+    // On error, still show auth button
+    authBtn.hidden = false;
     userBtn.hidden = true;
     if (authPrompt) authPrompt.hidden = true;
   }
@@ -494,19 +503,27 @@ if (authBtn) {
     if (authAvailable) {
       window.location.href = '/auth/google';
     } else {
-      toast('Authentication is not configured. You can still use all features without signing in!', 'info');
+      // Show a modal or more prominent message about auth not being configured
+      openSettings('about');
+      setTimeout(() => {
+        toast('Google authentication is not configured. You can still use all features without signing in!', 'info');
+      }, 300);
     }
   });
 }
 
 if (emptyAuthBtn) {
-  emptyAuthBtn.addEventListener('click', () => {
+  emptyAuthBtn.addEventListener('click', (e) => {
+    e.preventDefault();
     if (authAvailable) {
       window.location.href = '/auth/google';
     } else {
       // Hide the auth prompt since auth isn't available
       if (authPrompt) authPrompt.hidden = true;
-      toast('Authentication is not configured. You can still use all features without signing in!', 'info');
+      openSettings('about');
+      setTimeout(() => {
+        toast('Google authentication is not configured. You can still use all features without signing in!', 'info');
+      }, 300);
     }
   });
 }

@@ -179,6 +179,15 @@ body.ready .composer{animation:shellRise .6s .2s var(--ease) both}
   border-color:rgba(124,246,255,.5);
   transform:translateY(-1px);
 }
+.auth-btn.auth-unavailable{
+  opacity:0.5;
+  cursor:not-allowed;
+}
+.auth-btn.auth-unavailable:hover{
+  background:linear-gradient(135deg, rgba(124,246,255,.15) 0%, rgba(155,140,255,.15) 100%);
+  border-color:rgba(124,246,255,.3);
+  transform:none;
+}
 .auth-text{
   font-size:12px;
   font-weight:500;
